@@ -14,6 +14,16 @@ export {
 	tailRunEvents,
 } from "./events.ts";
 export {
+	mergeMulchFile,
+	type ReapExec,
+	type ReapFs,
+	type ReapRunInput,
+	type ReapRunResult,
+	type ReapStep,
+	type ReapStepError,
+	reapRun,
+} from "./reap.ts";
+export {
 	type SeedBurrowWorkspaceInput,
 	type SeedBurrowWorkspaceResult,
 	type SeedFs,
