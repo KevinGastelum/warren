@@ -11,7 +11,7 @@
  */
 
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
-import { NotFoundError, StateTransitionError } from "../../core/errors.ts";
+import { NotFoundError, StateTransitionError, ValidationError } from "../../core/errors.ts";
 import { generateId } from "../../core/ids.ts";
 import type { DrizzleDb } from "../client.ts";
 import { type RunRow, type RunState, type RunTerminalState, runs } from "../schema.ts";
@@ -43,8 +43,8 @@ export interface CreateRunInput {
 }
 
 export interface AttachBurrowInput {
-	burrowId: string;
-	burrowRunId: string;
+	burrowId?: string;
+	burrowRunId?: string;
 }
 
 export class RunsRepo {
@@ -112,12 +112,20 @@ export class RunsRepo {
 		return this.db.select().from(runs).where(where).orderBy(asc(runs.id)).all();
 	}
 
+	/**
+	 * Write back the burrow IDs as they become available. The §4.3 spawn flow
+	 * provisions the burrow first (`POST /burrows`) and dispatches the run
+	 * second (`POST /burrows/:id/runs`), so each ID lands on a different turn.
+	 * Both fields are optional, but at least one must be set.
+	 */
 	attachBurrow(id: string, input: AttachBurrowInput): RunRow {
+		if (input.burrowId === undefined && input.burrowRunId === undefined) {
+			throw new ValidationError("attachBurrow requires at least one of burrowId or burrowRunId");
+		}
 		const current = this.require(id);
-		const patch = {
-			burrowId: input.burrowId,
-			burrowRunId: input.burrowRunId,
-		};
+		const patch: { burrowId?: string; burrowRunId?: string } = {};
+		if (input.burrowId !== undefined) patch.burrowId = input.burrowId;
+		if (input.burrowRunId !== undefined) patch.burrowRunId = input.burrowRunId;
 		this.db.update(runs).set(patch).where(eq(runs.id, id)).run();
 		return { ...current, ...patch };
 	}
