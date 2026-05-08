@@ -4,6 +4,7 @@ domains:
   db: {}
   burrow-client: {}
   registry: {}
+  projects: {}
 governance:
   max_entries: 100
   warn_entries: 150
