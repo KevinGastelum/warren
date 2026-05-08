@@ -1,0 +1,303 @@
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import type { Run as BurrowRun } from "@os-eco/burrow-cli";
+import { BurrowClient, BurrowUnreachableError } from "../burrow-client/index.ts";
+import { NotFoundError, ValidationError } from "../core/errors.ts";
+import { openDatabase, type WarrenDb } from "../db/client.ts";
+import { createRepos, type Repos } from "../db/repos/index.ts";
+import { cancelRun } from "./cancel.ts";
+import { RunEventBroker } from "./events.ts";
+
+function stub(
+	impl: (input: URL | RequestInfo, init?: RequestInit) => Promise<Response>,
+): typeof fetch {
+	return impl as unknown as typeof fetch;
+}
+
+function jsonResponse(status: number, body: unknown): Response {
+	return new Response(JSON.stringify(body), {
+		status,
+		headers: { "content-type": "application/json" },
+	});
+}
+
+interface RecordedCall {
+	method: string;
+	path: string;
+	body: unknown;
+}
+
+interface CancelFetchPlan {
+	run?: Partial<BurrowRun>;
+	status?: number;
+	body?: unknown;
+}
+
+function makeBurrowClient(plan: CancelFetchPlan = {}): {
+	client: BurrowClient;
+	calls: RecordedCall[];
+} {
+	const calls: RecordedCall[] = [];
+	const fetchImpl = stub(async (input, init) => {
+		const url = new URL(String(input), "http://localhost");
+		const path = url.pathname;
+		const method = init?.method ?? "GET";
+		const reqBody = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
+		calls.push({ method, path, body: reqBody });
+		if (method === "POST" && path.match(/^\/runs\/[^/]+\/cancel$/)) {
+			const run: BurrowRun = {
+				id: "run_zzzzzzzzzzzz",
+				burrowId: "bur_aaaaaaaaaaaa",
+				agentId: "refactor-bot",
+				prompt: "p",
+				resumeOfRunId: null,
+				state: "cancelled",
+				exitCode: null,
+				errorMessage: null,
+				metadataJson: null,
+				queuedAt: new Date("2026-05-08T12:00:00Z"),
+				startedAt: null,
+				completedAt: new Date("2026-05-08T12:00:01Z"),
+				...plan.run,
+			};
+			return jsonResponse(plan.status ?? 200, plan.body ?? serializeRun(run));
+		}
+		return jsonResponse(404, {
+			error: { code: "not_found", message: `unmatched ${method} ${path}` },
+		});
+	});
+	const client = new BurrowClient({
+		config: { transport: { kind: "unix", path: "/tmp/x.sock" } },
+		fetch: fetchImpl,
+	});
+	return { client, calls };
+}
+
+function serializeRun(r: BurrowRun): unknown {
+	return {
+		...r,
+		queuedAt: r.queuedAt.toISOString(),
+		startedAt: r.startedAt?.toISOString() ?? null,
+		completedAt: r.completedAt?.toISOString() ?? null,
+	};
+}
+
+describe("cancelRun", () => {
+	let db: WarrenDb;
+	let repos: Repos;
+	let projectId: string;
+
+	beforeEach(async () => {
+		db = await openDatabase({ path: ":memory:" });
+		repos = createRepos(db);
+		repos.agents.upsert({ name: "refactor-bot", renderedJson: { sections: { system: "x" } } });
+		const project = repos.projects.create({
+			gitUrl: "https://github.com/x/y.git",
+			localPath: "/data/projects/x/y",
+			defaultBranch: "main",
+		});
+		projectId = project.id;
+	});
+
+	afterEach(() => {
+		db.close();
+	});
+
+	function createRun(
+		opts: {
+			burrowId?: string | null;
+			burrowRunId?: string | null;
+			state?: "queued" | "running";
+		} = {},
+	): string {
+		const run = repos.runs.create({
+			agentName: "refactor-bot",
+			projectId,
+			prompt: "p",
+			renderedAgentJson: {},
+			trigger: "manual",
+			burrowId: opts.burrowId === undefined ? "bur_aaaaaaaaaaaa" : opts.burrowId,
+			burrowRunId: opts.burrowRunId === undefined ? "run_zzzzzzzzzzzz" : opts.burrowRunId,
+		});
+		if (opts.state === "running") repos.runs.markRunning(run.id);
+		return run.id;
+	}
+
+	test("throws NotFoundError when the run does not exist", async () => {
+		const { client, calls } = makeBurrowClient();
+		await expect(
+			cancelRun({ runId: "run_doesnotexist", repos, burrowClient: client }),
+		).rejects.toBeInstanceOf(NotFoundError);
+		expect(calls).toHaveLength(0);
+	});
+
+	test("forwards the cancel to burrow and emits a cancel.requested event", async () => {
+		const runId = createRun({ state: "running" });
+		const { client, calls } = makeBurrowClient();
+		const result = await cancelRun({
+			runId,
+			reason: "operator changed their mind",
+			repos,
+			burrowClient: client,
+		});
+		expect(result.alreadyTerminal).toBe(false);
+		expect(result.burrowRun?.state).toBe("cancelled");
+		expect(calls).toEqual([
+			{
+				method: "POST",
+				path: "/runs/run_zzzzzzzzzzzz/cancel",
+				body: { reason: "operator changed their mind" },
+			},
+		]);
+		const events = repos.events.listByRun(runId);
+		expect(events).toHaveLength(1);
+		const event = events[0];
+		if (!event) throw new Error("no event");
+		expect(event.kind).toBe("cancel.requested");
+		expect(event.stream).toBe("system");
+		const payload = event.payloadJson as {
+			reason: string;
+			mode: string;
+			burrowRunId: string;
+		};
+		expect(payload.mode).toBe("forwarded");
+		expect(payload.reason).toBe("operator changed their mind");
+		expect(payload.burrowRunId).toBe("run_zzzzzzzzzzzz");
+	});
+
+	test("does not modify the warren run state — reap owns the terminal transition", async () => {
+		const runId = createRun({ state: "running" });
+		const { client } = makeBurrowClient();
+		await cancelRun({ runId, repos, burrowClient: client });
+		expect(repos.runs.require(runId).state).toBe("running");
+	});
+
+	test("omits the reason field on the wire when unset", async () => {
+		const runId = createRun({ state: "running" });
+		const { client, calls } = makeBurrowClient();
+		await cancelRun({ runId, repos, burrowClient: client });
+		expect(calls[0]?.body).toBeUndefined();
+	});
+
+	test("returns idempotently when the run is already terminal", async () => {
+		const runId = createRun({ state: "running" });
+		repos.runs.finalize(runId, "succeeded");
+		const { client, calls } = makeBurrowClient();
+		const result = await cancelRun({ runId, repos, burrowClient: client });
+		expect(result.alreadyTerminal).toBe(true);
+		expect(result.state).toBe("succeeded");
+		expect(result.burrowRun).toBeNull();
+		expect(calls).toHaveLength(0);
+		expect(repos.events.countByRun(runId)).toBe(0);
+	});
+
+	test("queued run with no burrow_run_id is cancelled in warren without a wire call", async () => {
+		const run = repos.runs.create({
+			agentName: "refactor-bot",
+			projectId,
+			prompt: "p",
+			renderedAgentJson: {},
+			trigger: "manual",
+			burrowId: "bur_aaaaaaaaaaaa",
+			burrowRunId: null,
+		});
+		const { client, calls } = makeBurrowClient();
+		const result = await cancelRun({
+			runId: run.id,
+			reason: "abort",
+			repos,
+			burrowClient: client,
+		});
+		expect(result.alreadyTerminal).toBe(false);
+		expect(result.burrowRun).toBeNull();
+		expect(result.state).toBe("cancelled");
+		expect(calls).toHaveLength(0);
+		expect(repos.runs.require(run.id).state).toBe("cancelled");
+		const events = repos.events.listByRun(run.id);
+		expect(events).toHaveLength(1);
+		const event = events[0];
+		if (!event) throw new Error("no event");
+		expect(event.kind).toBe("cancel.requested");
+		const payload = event.payloadJson as { mode: string; reason: string };
+		expect(payload.mode).toBe("warren_only");
+		expect(payload.reason).toBe("abort");
+	});
+
+	test("rejects a running run with no burrow_run_id (impossible state)", async () => {
+		const run = repos.runs.create({
+			agentName: "refactor-bot",
+			projectId,
+			prompt: "p",
+			renderedAgentJson: {},
+			trigger: "manual",
+			burrowId: "bur_aaaaaaaaaaaa",
+			burrowRunId: null,
+		});
+		repos.runs.markRunning(run.id);
+		const { client, calls } = makeBurrowClient();
+		await expect(cancelRun({ runId: run.id, repos, burrowClient: client })).rejects.toBeInstanceOf(
+			ValidationError,
+		);
+		expect(calls).toHaveLength(0);
+	});
+
+	test("publishes the audit event to the broker", async () => {
+		const runId = createRun({ state: "running" });
+		const broker = new RunEventBroker();
+		const sub = broker.subscribe(runId);
+		const consumed: string[] = [];
+		const consumer = (async () => {
+			for await (const row of sub) {
+				consumed.push(row.kind);
+				if (consumed.length >= 1) break;
+			}
+		})();
+		const { client } = makeBurrowClient();
+		await cancelRun({ runId, repos, burrowClient: client, broker });
+		await consumer;
+		expect(consumed).toEqual(["cancel.requested"]);
+	});
+
+	test("audit event seq starts at MAX(seq) + 1 when prior events exist", async () => {
+		const runId = createRun({ state: "running" });
+		repos.events.append({
+			runId,
+			burrowEventSeq: 12,
+			ts: "2026-05-08T12:00:00Z",
+			kind: "text",
+			stream: "stdout",
+			payload: {},
+		});
+		const { client } = makeBurrowClient();
+		await cancelRun({ runId, repos, burrowClient: client });
+		const events = repos.events.listByRun(runId);
+		const requested = events.find((e) => e.kind === "cancel.requested");
+		expect(requested?.burrowEventSeq).toBe(13);
+	});
+
+	test("transport errors are mapped to BurrowUnreachableError", async () => {
+		const runId = createRun({ state: "running" });
+		const fetchImpl = stub(async () => {
+			throw new TypeError("fetch failed");
+		});
+		const client = new BurrowClient({
+			config: { transport: { kind: "unix", path: "/tmp/x.sock" } },
+			fetch: fetchImpl,
+		});
+		await expect(cancelRun({ runId, repos, burrowClient: client })).rejects.toBeInstanceOf(
+			BurrowUnreachableError,
+		);
+		// No audit event was emitted, and the run is still running.
+		expect(repos.events.countByRun(runId)).toBe(0);
+		expect(repos.runs.require(runId).state).toBe("running");
+	});
+
+	test("server-side burrow errors propagate without emitting an audit event", async () => {
+		const runId = createRun({ state: "running" });
+		const { client } = makeBurrowClient({
+			status: 404,
+			body: { error: { code: "not_found", message: "burrow run gone" } },
+		});
+		await expect(cancelRun({ runId, repos, burrowClient: client })).rejects.toThrow();
+		expect(repos.events.countByRun(runId)).toBe(0);
+	});
+});

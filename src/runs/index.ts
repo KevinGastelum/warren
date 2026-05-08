@@ -5,6 +5,7 @@
  */
 
 export { type ParsedBurrowConfig, parseBurrowConfig } from "./burrow_config.ts";
+export { type CancelRunInput, type CancelRunResult, cancelRun } from "./cancel.ts";
 export { RunSpawnError } from "./errors.ts";
 export {
 	DEFAULT_SUBSCRIPTION_BUFFER,
@@ -30,6 +31,7 @@ export {
 	seedBurrowWorkspace,
 } from "./seed.ts";
 export { type SpawnRunInput, type SpawnRunResult, spawnRun } from "./spawn.ts";
+export { type SteerRunInput, type SteerRunResult, steerRun } from "./steer.ts";
 export {
 	type ActiveBridge,
 	type BridgeLogger,
