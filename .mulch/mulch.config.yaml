@@ -3,6 +3,7 @@ domains:
   build: {}
   db: {}
   burrow-client: {}
+  registry: {}
 governance:
   max_entries: 100
   warn_entries: 150
