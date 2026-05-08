@@ -1,0 +1,14 @@
+# Anything not needed inside the image. Mirrors .gitignore plus a few
+# build artefacts and dev-loop directories.
+.git
+.github
+node_modules
+src/ui/node_modules
+src/ui/dist
+src/ui/*.tsbuildinfo
+data
+.env
+.env.local
+*.log
+.DS_Store
+.mulch/archive

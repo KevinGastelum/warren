@@ -1,0 +1,83 @@
+# Warren on Fly.io (SPEC §10.2).
+#
+# `fly launch` reads this file. The Machine inherits the same image used
+# for `docker compose up`; Fly Machines are Firecracker VMs, so the four
+# bwrap security overrides (which a managed K8s cluster would refuse) are
+# applied at the Machine level here.
+#
+# Operator workflow:
+#   fly launch                  # creates the app from this fly.toml
+#   fly volumes create warren_data --size 50 --region sjc
+#   fly secrets set \
+#       WARREN_API_TOKEN=$(openssl rand -hex 32) \
+#       CANOPY_REPO_URL=https://github.com/<you>/agents.git \
+#       ANTHROPIC_API_KEY=... \
+#       GITHUB_TOKEN=...
+#   fly deploy
+#
+# After deploy, the warren UI is reachable at https://<app>.fly.dev.
+
+app = "warren"
+primary_region = "sjc"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  WARREN_DATA_DIR = "/data"
+  WARREN_BIND_HOST = "0.0.0.0"
+  WARREN_BIND_PORT = "8080"
+
+[[mounts]]
+  source = "warren_data"
+  destination = "/data"
+
+# Warren is single-instance: one Machine, one persistent volume. Deploys
+# bounce the supervisor (which restarts both children); the volume keeps
+# warren.db, canopy clone, and project clones across deploys.
+[[services]]
+  internal_port = 8080
+  protocol = "tcp"
+  auto_stop_machines = "off"
+  auto_start_machines = false
+  min_machines_running = 1
+
+  [[services.ports]]
+    port = 80
+    handlers = ["http"]
+    force_https = true
+
+  [[services.ports]]
+    port = 443
+    handlers = ["tls", "http"]
+
+  [services.concurrency]
+    type = "connections"
+    hard_limit = 100
+    soft_limit = 80
+
+  [[services.http_checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "20s"
+    method = "get"
+    path = "/healthz"
+
+# Bwrap inside a Fly Machine needs the same overrides as a Linux host
+# does inside a managed container. `unprivileged_userns` is on by default
+# on Fly's machine kernels; the four overrides below match docker-compose
+# so the same image works without a posture change.
+[experimental]
+  enable_consul = false
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 2
+  memory = "2gb"
+
+# NOTE: Fly's TOML schema doesn't have first-class fields for the four
+# bwrap flags (apparmor / seccomp / systempaths / SYS_ADMIN). Fly
+# Machines run on Firecracker — they're a VM, not a container — so
+# bwrap nests without any of those overrides on a stock Machine kernel.
+# The container-only flags in docker-compose.yml are not needed here.
+# See burrow/DEPLOY.md "Reference Fly Machine config" for the rationale.
