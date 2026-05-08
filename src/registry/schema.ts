@@ -1,0 +1,100 @@
+/**
+ * Schemas for canopy `cn render` output and warren's normalized agent
+ * definition (SPEC §4.2).
+ *
+ * `RenderResponseSchema` mirrors the wire shape canopy 0.2.x emits with
+ * `--format json` — `{success, command, name, version, sections, ...}`.
+ * Failure-shaped responses (`success: false`) are caught at the canopy
+ * facade boundary, so the schema only needs to model the happy-path
+ * envelope.
+ *
+ * `parseRenderedAgent` collapses the section list into a `name → body`
+ * map (the rest of warren never cares about ordering — `cn render` already
+ * resolved inheritance + mixins). It also enforces warren's semantic rule:
+ * an agent prompt MUST include a `system` section. Other sections from
+ * SPEC §4.2 (`skills`, `expertise_seed`, `burrow_config`, `workflow`) are
+ * optional — they are consumed at run-spawn time (Phase 5), not now, and
+ * canopy's own per-prompt schema is the right place to enforce richer
+ * structural rules.
+ *
+ * Duplicate section names are rejected: canopy renders an inherited
+ * prompt by overriding parent sections with same-named child sections, so
+ * the rendered output should never contain dupes. If we see one, the
+ * canopy install is corrupt — surface that loudly rather than silently
+ * dropping data.
+ */
+
+import { z } from "zod";
+import { AgentSchemaError } from "./errors.ts";
+
+export const REQUIRED_AGENT_SECTIONS = ["system"] as const;
+export type RequiredAgentSection = (typeof REQUIRED_AGENT_SECTIONS)[number];
+
+const SectionSchema = z.object({
+	name: z.string().min(1),
+	body: z.string(),
+});
+
+export const RenderResponseSchema = z.object({
+	success: z.literal(true),
+	command: z.literal("render"),
+	name: z.string().min(1),
+	version: z.number().int().positive(),
+	sections: z.array(SectionSchema),
+	resolvedFrom: z.array(z.string()).optional(),
+	frontmatter: z.record(z.string(), z.unknown()).optional(),
+});
+
+export type RenderResponse = z.infer<typeof RenderResponseSchema>;
+
+export interface AgentDefinition {
+	readonly name: string;
+	readonly version: number;
+	readonly sections: Readonly<Record<string, string>>;
+	readonly resolvedFrom: readonly string[];
+	readonly frontmatter: Readonly<Record<string, unknown>>;
+}
+
+/**
+ * Parse and semantically validate the JSON body returned by
+ * `cn render <name> --format json`. Throws `AgentSchemaError` for
+ * any malformed or incomplete shape.
+ */
+export function parseRenderedAgent(raw: unknown, agentName?: string): AgentDefinition {
+	const parsed = RenderResponseSchema.safeParse(raw);
+	if (!parsed.success) {
+		throw new AgentSchemaError(
+			`canopy render output failed schema validation${agentName ? ` for "${agentName}"` : ""}: ${parsed.error.issues.map(formatZodIssue).join("; ")}`,
+		);
+	}
+	const env = parsed.data;
+	const sections: Record<string, string> = {};
+	for (const section of env.sections) {
+		if (Object.hasOwn(sections, section.name)) {
+			throw new AgentSchemaError(
+				`canopy render returned duplicate section "${section.name}" for agent "${env.name}"`,
+			);
+		}
+		sections[section.name] = section.body;
+	}
+	for (const required of REQUIRED_AGENT_SECTIONS) {
+		if (!Object.hasOwn(sections, required)) {
+			throw new AgentSchemaError(`agent "${env.name}" is missing required section "${required}"`, {
+				recoveryHint: `add a "${required}" section to the canopy prompt and re-render`,
+			});
+		}
+	}
+
+	return {
+		name: env.name,
+		version: env.version,
+		sections,
+		resolvedFrom: env.resolvedFrom ?? [],
+		frontmatter: env.frontmatter ?? {},
+	};
+}
+
+function formatZodIssue(issue: z.core.$ZodIssue): string {
+	const path = issue.path.length === 0 ? "<root>" : issue.path.join(".");
+	return `${path}: ${issue.message}`;
+}
