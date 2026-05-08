@@ -1,8 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { BurrowClient } from "../burrow-client/index.ts";
 import { ValidationError } from "../core/errors.ts";
 import { openDatabase, type WarrenDb } from "../db/client.ts";
 import { createRepos, type Repos } from "../db/repos/index.ts";
+import type { SpawnFn } from "../projects/clone.ts";
 import { RunEventBroker } from "../runs/index.ts";
 import { bearerAuth, NO_AUTH } from "./auth.ts";
 import { createBridgeRegistry } from "./bridges.ts";
@@ -29,7 +33,26 @@ function makeBurrowClient(): BurrowClient {
 	});
 }
 
-function depsFor(repos: Repos, bridges?: BridgeRegistry): ServerDeps {
+/**
+ * Default spawn stub: succeeds for `bwrap --version` and `git status
+ * --porcelain` so readyz/doctor probes don't shell out to the host
+ * during tests. Individual tests can pass their own override.
+ */
+const okSpawn: SpawnFn = async (cmd) => {
+	if (cmd[0]?.endsWith("bwrap")) {
+		return { stdout: "bubblewrap 0.8.0\n", stderr: "", exitCode: 0 };
+	}
+	if (cmd.includes("status") && cmd.includes("--porcelain")) {
+		return { stdout: "", stderr: "", exitCode: 0 };
+	}
+	return { stdout: "", stderr: "", exitCode: 0 };
+};
+
+function depsFor(
+	repos: Repos,
+	bridges?: BridgeRegistry,
+	overrides: { spawn?: SpawnFn; canopyDir?: string } = {},
+): ServerDeps {
 	const burrowClient = makeBurrowClient();
 	const broker = new RunEventBroker();
 	return {
@@ -46,13 +69,14 @@ function depsFor(repos: Repos, bridges?: BridgeRegistry): ServerDeps {
 			}),
 		canopyConfig: {
 			repoUrl: "https://example/agents.git",
-			localDir: "/tmp/cn",
+			localDir: overrides.canopyDir ?? "/tmp/warren-canopy-nonexistent",
 			cnBinary: "cn",
 			gitBinary: "git",
 		},
 		projectsConfig: { root: "/tmp/projects", gitBinary: "git" },
 		logger: silentLogger,
 		uiDistDir: null,
+		spawn: overrides.spawn ?? okSpawn,
 	};
 }
 
@@ -229,21 +253,108 @@ describe("startServer — routes", () => {
 		expect(res.status).toBe(404);
 	});
 
-	test("/readyz returns 503 when burrow probe fails or no agents", async () => {
-		// Empty agents — readyz should be 503.
+	test("/readyz returns 503 when any mirrored check fails", async () => {
+		// Empty agents + nonexistent canopy clone — readyz should be 503
+		// and surface the failing checks by name.
 		const dbEmpty = await openDatabase({ path: ":memory:" });
 		const reposEmpty = createRepos(dbEmpty);
 		try {
 			handle = startServer(depsFor(reposEmpty), tcpOpts());
 			const res = await fetch(`${tcpUrl(handle)}/readyz`);
 			expect(res.status).toBe(503);
-			const body = (await res.json()) as { ok: boolean; checks: { name: string; ok: boolean }[] };
+			const body = (await res.json()) as {
+				ok: boolean;
+				checks: { name: string; ok: boolean }[];
+			};
 			expect(body.ok).toBe(false);
+			const names = body.checks.map((c) => c.name);
+			expect(names).toContain("burrow_reachable");
+			expect(names).toContain("agents");
+			expect(names).toContain("canopy_clone");
+			expect(names).toContain("canopy_clean");
+			expect(names).toContain("bwrap");
 			expect(body.checks.find((c) => c.name === "agents")?.ok).toBe(false);
+			expect(body.checks.find((c) => c.name === "canopy_clone")?.ok).toBe(false);
 		} finally {
 			await handle?.stop();
 			handle = null;
 			dbEmpty.close();
+		}
+	});
+
+	test("/readyz returns 200 when every mirrored check passes", async () => {
+		// Existing canopy clone + at least one agent registered + burrow
+		// probe succeeds (stubbed) + bwrap + canopy_clean stubbed clean.
+		const canopyDir = mkdtempSync(join(tmpdir(), "warren-readyz-"));
+		try {
+			handle = startServer(depsFor(repos, undefined, { canopyDir }), tcpOpts());
+			const res = await fetch(`${tcpUrl(handle)}/readyz`);
+			expect(res.status).toBe(200);
+			const body = (await res.json()) as {
+				ok: boolean;
+				checks: { name: string; ok: boolean }[];
+			};
+			expect(body.ok).toBe(true);
+			expect(body.checks.every((c) => c.ok)).toBe(true);
+		} finally {
+			await handle?.stop();
+			handle = null;
+			rmSync(canopyDir, { recursive: true, force: true });
+		}
+	});
+
+	test("/readyz flags bwrap when the probe fails", async () => {
+		const canopyDir = mkdtempSync(join(tmpdir(), "warren-readyz-bwrap-"));
+		const failBwrap: SpawnFn = async (cmd) => {
+			if (cmd[0]?.endsWith("bwrap")) {
+				return { stdout: "", stderr: "command not found", exitCode: 127 };
+			}
+			return { stdout: "", stderr: "", exitCode: 0 };
+		};
+		try {
+			handle = startServer(depsFor(repos, undefined, { canopyDir, spawn: failBwrap }), tcpOpts());
+			const res = await fetch(`${tcpUrl(handle)}/readyz`);
+			expect(res.status).toBe(503);
+			const body = (await res.json()) as {
+				ok: boolean;
+				checks: { name: string; ok: boolean; hint?: string }[];
+			};
+			const bwrap = body.checks.find((c) => c.name === "bwrap");
+			expect(bwrap?.ok).toBe(false);
+			expect(bwrap?.hint).toContain("bubblewrap");
+		} finally {
+			await handle?.stop();
+			handle = null;
+			rmSync(canopyDir, { recursive: true, force: true });
+		}
+	});
+
+	test("/readyz flags canopy_clean when git status reports dirt", async () => {
+		const canopyDir = mkdtempSync(join(tmpdir(), "warren-readyz-dirty-"));
+		const dirtySpawn: SpawnFn = async (cmd) => {
+			if (cmd[0]?.endsWith("bwrap")) {
+				return { stdout: "bubblewrap 0.8.0\n", stderr: "", exitCode: 0 };
+			}
+			if (cmd.includes("status") && cmd.includes("--porcelain")) {
+				return { stdout: " M agents/foo.md\n?? scratch.txt\n", stderr: "", exitCode: 0 };
+			}
+			return { stdout: "", stderr: "", exitCode: 0 };
+		};
+		try {
+			handle = startServer(depsFor(repos, undefined, { canopyDir, spawn: dirtySpawn }), tcpOpts());
+			const res = await fetch(`${tcpUrl(handle)}/readyz`);
+			expect(res.status).toBe(503);
+			const body = (await res.json()) as {
+				ok: boolean;
+				checks: { name: string; ok: boolean; message?: string }[];
+			};
+			const clean = body.checks.find((c) => c.name === "canopy_clean");
+			expect(clean?.ok).toBe(false);
+			expect(clean?.message).toContain("2 local mutation");
+		} finally {
+			await handle?.stop();
+			handle = null;
+			rmSync(canopyDir, { recursive: true, force: true });
 		}
 	});
 });

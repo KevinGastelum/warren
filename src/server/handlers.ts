@@ -27,8 +27,14 @@
  */
 
 import type { MessagePriority } from "@os-eco/burrow-cli";
-import { withTransportMapping } from "../burrow-client/client.ts";
 import { ValidationError } from "../core/errors.ts";
+import {
+	checkBurrowReachable,
+	checkBwrap,
+	checkCanopyClean,
+	checkCanopyClone,
+	type DiagnosticCheck,
+} from "../diagnostics/checks.ts";
 import type { SpawnFn, SpawnOptions, SpawnResult } from "../projects/clone.ts";
 import { addProject, deleteProject, listProjects } from "../projects/index.ts";
 import { CanopyClient } from "../registry/canopy.ts";
@@ -412,21 +418,26 @@ function healthz(): RouteHandler {
 	return () => jsonResponse(200, { ok: true });
 }
 
-interface ReadyCheckResult {
-	readonly name: string;
-	readonly ok: boolean;
-	readonly message?: string;
-}
-
 function readyz(deps: ServerDeps): RouteHandler {
 	return async () => {
-		const checks: ReadyCheckResult[] = [];
+		// SpawnFn is required for the bwrap + canopy_clean probes; main.ts
+		// always wires `defaultSpawn`, but the type system keeps it
+		// optional so tests don't have to populate it. Fall back to the
+		// handler-local `defaultSpawn` to keep the contract live in tests
+		// that don't override.
+		const spawn: SpawnFn = deps.spawn ?? defaultSpawn;
+		const env: Readonly<Record<string, string | undefined>> = {
+			CANOPY_REPO_URL: deps.canopyConfig.repoUrl,
+			WARREN_CANOPY_DIR: deps.canopyConfig.localDir,
+			WARREN_GIT_BINARY: deps.canopyConfig.gitBinary,
+		};
 
-		const burrowOk = await probeBurrow(deps);
-		checks.push(burrowOk);
-
-		const agentsOk = checkAgentsRegistered(deps);
-		checks.push(agentsOk);
+		const checks: DiagnosticCheck[] = [];
+		checks.push(await checkBurrowReachable({ burrowClient: deps.burrowClient }));
+		checks.push(checkAgentsRegistered(deps));
+		checks.push(checkCanopyClone({ env }));
+		checks.push(await checkCanopyClean({ env, spawn }));
+		checks.push(await checkBwrap({ spawn }));
 
 		const allOk = checks.every((c) => c.ok);
 		return jsonResponse(allOk ? 200 : 503, {
@@ -436,26 +447,14 @@ function readyz(deps: ServerDeps): RouteHandler {
 	};
 }
 
-async function probeBurrow(deps: ServerDeps): Promise<ReadyCheckResult> {
-	try {
-		await withTransportMapping(deps.burrowClient.config, () => deps.burrowClient.probe());
-		return { name: "burrow", ok: true };
-	} catch (err) {
-		return {
-			name: "burrow",
-			ok: false,
-			message: err instanceof Error ? err.message : String(err),
-		};
-	}
-}
-
-function checkAgentsRegistered(deps: ServerDeps): ReadyCheckResult {
+function checkAgentsRegistered(deps: ServerDeps): DiagnosticCheck {
 	const count = deps.repos.agents.listAll().length;
 	if (count === 0) {
 		return {
 			name: "agents",
 			ok: false,
 			message: "no agents registered (POST /agents/refresh against your canopy library)",
+			hint: "POST /agents/refresh against your canopy library",
 		};
 	}
 	return { name: "agents", ok: true };

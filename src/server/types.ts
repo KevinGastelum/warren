@@ -11,6 +11,7 @@
 
 import type { BurrowClient } from "../burrow-client/client.ts";
 import type { Repos } from "../db/repos/index.ts";
+import type { SpawnFn } from "../projects/clone.ts";
 import type { ProjectsConfig } from "../projects/config.ts";
 import type { CanopyRegistryConfig } from "../registry/config.ts";
 import type { RunEventBroker } from "../runs/events.ts";
@@ -102,6 +103,12 @@ export interface ServerDeps {
 	readonly logger: Logger;
 	/** UI dist directory for static serving; null disables `/` and `/assets/*`. */
 	readonly uiDistDir: string | null;
+	/**
+	 * Spawn seam used by `/readyz` (Phase 13 bwrap + canopy_clean probes)
+	 * and any future shell-out from a handler. `main.ts` wires the
+	 * production `Bun.spawn` adapter; tests pass a stub.
+	 */
+	readonly spawn?: SpawnFn;
 	/** Provided so tests can override `Date.now()`. */
 	readonly now?: () => Date;
 }

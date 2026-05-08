@@ -27,6 +27,7 @@ import pino from "pino";
 import { BurrowClient } from "../burrow-client/index.ts";
 import { openDatabase, type WarrenDb } from "../db/client.ts";
 import { createRepos } from "../db/repos/index.ts";
+import type { SpawnFn, SpawnOptions, SpawnResult } from "../projects/clone.ts";
 import { loadProjectsConfigFromEnv } from "../projects/config.ts";
 import { loadCanopyRegistryConfigFromEnv } from "../registry/config.ts";
 import { RunEventBroker } from "../runs/index.ts";
@@ -110,6 +111,7 @@ export async function bootServer(opts: BootServerOptions = {}): Promise<WarrenSe
 		projectsConfig,
 		logger,
 		uiDistDir: serverConfig.uiDistDir,
+		spawn: defaultSpawn,
 		...(opts.now !== undefined ? { now: opts.now } : {}),
 	};
 
@@ -136,6 +138,36 @@ export async function bootServer(opts: BootServerOptions = {}): Promise<WarrenSe
 		},
 	};
 }
+
+/**
+ * Production `Bun.spawn` adaptor matching the SpawnFn shape the
+ * registry/projects modules and the Phase-13 `/readyz` probes consume.
+ * Identical to the CLI's `defaultSpawn` (output.ts) and the local
+ * `defaultSpawn` in handlers.ts; the duplication is deliberate so
+ * neither surface imports the other.
+ */
+const defaultSpawn: SpawnFn = async (
+	cmd: readonly string[],
+	opts: SpawnOptions,
+): Promise<SpawnResult> => {
+	const proc = Bun.spawn({
+		cmd: [...cmd],
+		cwd: opts.cwd,
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+	const timer =
+		opts.timeoutMs !== undefined && opts.timeoutMs > 0
+			? setTimeout(() => proc.kill(), opts.timeoutMs)
+			: null;
+	const [stdout, stderr, exitCode] = await Promise.all([
+		new Response(proc.stdout).text(),
+		new Response(proc.stderr).text(),
+		proc.exited,
+	]);
+	if (timer !== null) clearTimeout(timer);
+	return { stdout, stderr, exitCode: exitCode ?? 0 };
+};
 
 function closeDatabase(db: WarrenDb): void {
 	try {

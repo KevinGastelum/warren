@@ -1,35 +1,36 @@
 /**
  * `warren doctor` — startup health check (SPEC §8.2).
  *
- * Phase 11 wires the command shell with the checks warren can run today
- * without new infra: required env vars, burrow socket reachability via
- * `BurrowClient.probe`, and that the canopy clone exists on disk.
+ * Runs the union of:
+ *   - required env vars (WARREN_API_TOKEN, CANOPY_REPO_URL),
+ *   - canopy clone exists on disk,
+ *   - canopy clone is "clean" (no working-tree mutations — Phase 13),
+ *   - bwrap binary reachable (Phase 13),
+ *   - projects root resolvable (non-fatal),
+ *   - burrow socket reachable.
  *
- * Phase 13 (warren-a29f) is the dedicated wiring step that adds:
- *   - `bwrap --version` probe (sandbox bring-up readiness)
- *   - canopy "clean clone" check (no local mutations)
- *   - mirroring the same set into `/readyz`'s body
- *
- * Each check returns `{name, ok, message?, hint?}`. The command exits 0
- * when every check passes and 1 when any fails — operators wire this
- * into their boot/CI scripts.
+ * The Phase-13 probes (bwrap + canopy_clean) live in
+ * `src/diagnostics/checks.ts` so `GET /readyz` mirrors them without
+ * duplicating logic. Each check returns `{name, ok, message?, hint?}`;
+ * the command exits 0 when every check passes and 1 otherwise.
  */
 
 import { existsSync } from "node:fs";
 import { BurrowClient } from "../../burrow-client/client.ts";
 import { loadBurrowClientConfigFromEnv } from "../../burrow-client/config.ts";
 import { ValidationError } from "../../core/errors.ts";
+import {
+	checkBurrowReachable,
+	checkBwrap,
+	checkCanopyClean,
+	checkCanopyClone,
+	type DiagnosticCheck,
+} from "../../diagnostics/checks.ts";
 import { loadProjectsConfigFromEnv } from "../../projects/config.ts";
-import { loadCanopyRegistryConfigFromEnv } from "../../registry/config.ts";
 import type { CliContext, EnvLike } from "../output.ts";
 import { writeJsonLine } from "../output.ts";
 
-export interface DoctorCheck {
-	readonly name: string;
-	readonly ok: boolean;
-	readonly message?: string;
-	readonly hint?: string;
-}
+export type DoctorCheck = DiagnosticCheck;
 
 export interface DoctorArgs {
 	readonly noAuth?: boolean;
@@ -52,16 +53,18 @@ export async function runDoctor(
 	deps: DoctorDeps,
 	args: DoctorArgs,
 ): Promise<DoctorResult> {
+	const exists = deps.existsSync ?? existsSync;
 	const checks: DoctorCheck[] = [];
 
 	checks.push(envCheck("WARREN_API_TOKEN", context.env, args.noAuth ?? false));
 	checks.push(envCheck("CANOPY_REPO_URL", context.env, false));
 
-	const canopyClone = canopyCloneCheck(context.env, deps.existsSync ?? existsSync);
-	checks.push(canopyClone);
+	checks.push(checkCanopyClone({ env: context.env, exists }));
+	checks.push(await checkCanopyClean({ env: context.env, spawn: context.spawn, exists }));
 
-	const projectsRoot = projectsRootCheck(context.env, deps.existsSync ?? existsSync);
-	checks.push(projectsRoot);
+	checks.push(projectsRootCheck(context.env, exists));
+
+	checks.push(await checkBwrap({ spawn: context.spawn }));
 
 	checks.push(await burrowCheck(context.env, deps.probeBurrow));
 
@@ -90,30 +93,6 @@ function envCheck(name: string, env: EnvLike, exempted: boolean): DoctorCheck {
 	};
 }
 
-function canopyCloneCheck(env: EnvLike, exists: (path: string) => boolean): DoctorCheck {
-	let config: ReturnType<typeof loadCanopyRegistryConfigFromEnv>;
-	try {
-		config = loadCanopyRegistryConfigFromEnv(env);
-	} catch (err) {
-		const message = err instanceof Error ? err.message : String(err);
-		return {
-			name: "canopy_clone",
-			ok: false,
-			message,
-			hint: "set CANOPY_REPO_URL and (optionally) WARREN_CANOPY_DIR",
-		};
-	}
-	if (!exists(config.localDir)) {
-		return {
-			name: "canopy_clone",
-			ok: false,
-			message: `canopy clone directory does not exist: ${config.localDir}`,
-			hint: "POST /agents/refresh or run `warren register-agent <name>` to clone",
-		};
-	}
-	return { name: "canopy_clone", ok: true, message: config.localDir };
-}
-
 function projectsRootCheck(env: EnvLike, exists: (path: string) => boolean): DoctorCheck {
 	let config: ReturnType<typeof loadProjectsConfigFromEnv>;
 	try {
@@ -137,19 +116,31 @@ async function burrowCheck(
 	env: EnvLike,
 	override?: (env: EnvLike) => Promise<void>,
 ): Promise<DoctorCheck> {
-	try {
-		if (override !== undefined) {
+	if (override !== undefined) {
+		try {
 			await override(env);
-		} else {
-			const config = loadBurrowClientConfigFromEnv(env);
-			const client = new BurrowClient({ config });
-			try {
-				await client.probe();
-			} finally {
-				await client.close().catch(() => undefined);
+			return { name: "burrow_reachable", ok: true };
+		} catch (err) {
+			if (err instanceof ValidationError) {
+				return {
+					name: "burrow_reachable",
+					ok: false,
+					message: err.message,
+					...(err.recoveryHint !== undefined ? { hint: err.recoveryHint } : {}),
+				};
 			}
+			return {
+				name: "burrow_reachable",
+				ok: false,
+				message: err instanceof Error ? err.message : String(err),
+				hint: "check that burrow serve is running and WARREN_BURROW_SOCKET / WARREN_BURROW_HOST point to it",
+			};
 		}
-		return { name: "burrow_reachable", ok: true };
+	}
+	let client: BurrowClient;
+	try {
+		const config = loadBurrowClientConfigFromEnv(env);
+		client = new BurrowClient({ config });
 	} catch (err) {
 		if (err instanceof ValidationError) {
 			return {
@@ -165,5 +156,10 @@ async function burrowCheck(
 			message: err instanceof Error ? err.message : String(err),
 			hint: "check that burrow serve is running and WARREN_BURROW_SOCKET / WARREN_BURROW_HOST point to it",
 		};
+	}
+	try {
+		return await checkBurrowReachable({ burrowClient: client });
+	} finally {
+		await client.close().catch(() => undefined);
 	}
 }

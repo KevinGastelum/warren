@@ -1,8 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import type { CliContext, EnvLike } from "../output.ts";
+import type { CliContext, CliSpawn, EnvLike } from "../output.ts";
 import { type DoctorCheck, runDoctor } from "./doctor.ts";
 
-function captureContext(env: EnvLike = {}): {
+function captureContext(
+	env: EnvLike = {},
+	spawn: CliSpawn = async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+): {
 	context: CliContext;
 	out: string[];
 	err: string[];
@@ -15,7 +18,7 @@ function captureContext(env: EnvLike = {}): {
 			stdout: { write: (c) => out.push(c) },
 			stderr: { write: (c) => err.push(c) },
 		},
-		spawn: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+		spawn,
 		now: () => new Date("2026-05-08T12:00:00.000Z"),
 	};
 	return { context, out, err };
@@ -112,5 +115,85 @@ describe("runDoctor", () => {
 		);
 		expect(result.exitCode).toBe(0);
 		expect(result.checks.every((c: DoctorCheck) => c.ok)).toBe(true);
+	});
+
+	test("flags a missing bwrap binary with the install hint", async () => {
+		const { context } = captureContext(
+			{
+				WARREN_API_TOKEN: "tok",
+				CANOPY_REPO_URL: "https://example.com/agents.git",
+			},
+			async (cmd) => {
+				if (cmd[0]?.endsWith("bwrap")) {
+					return { stdout: "", stderr: "command not found", exitCode: 127 };
+				}
+				return { stdout: "", stderr: "", exitCode: 0 };
+			},
+		);
+		const result = await runDoctor(
+			context,
+			{
+				existsSync: () => true,
+				probeBurrow: async () => undefined,
+			},
+			{},
+		);
+		expect(result.exitCode).toBe(1);
+		const bwrap = result.checks.find((c: DoctorCheck) => c.name === "bwrap");
+		expect(bwrap?.ok).toBe(false);
+		expect(bwrap?.hint).toContain("bubblewrap");
+	});
+
+	test("flags a dirty canopy clone with the refresh hint", async () => {
+		const { context } = captureContext(
+			{
+				WARREN_API_TOKEN: "tok",
+				CANOPY_REPO_URL: "https://example.com/agents.git",
+			},
+			async (cmd) => {
+				if (cmd.includes("status") && cmd.includes("--porcelain")) {
+					return { stdout: " M agents/foo.md\n", stderr: "", exitCode: 0 };
+				}
+				return { stdout: "bubblewrap 0.8.0", stderr: "", exitCode: 0 };
+			},
+		);
+		const result = await runDoctor(
+			context,
+			{
+				existsSync: () => true,
+				probeBurrow: async () => undefined,
+			},
+			{},
+		);
+		expect(result.exitCode).toBe(1);
+		const clean = result.checks.find((c: DoctorCheck) => c.name === "canopy_clean");
+		expect(clean?.ok).toBe(false);
+		expect(clean?.message).toContain("1 local mutation");
+		expect(clean?.hint).toContain("/agents/refresh");
+	});
+
+	test("emits all six expected check names", async () => {
+		const { context } = captureContext({
+			WARREN_API_TOKEN: "tok",
+			CANOPY_REPO_URL: "https://example.com/agents.git",
+		});
+		const result = await runDoctor(
+			context,
+			{
+				existsSync: () => true,
+				probeBurrow: async () => undefined,
+			},
+			{},
+		);
+		const names = result.checks.map((c) => c.name);
+		expect(names).toEqual([
+			"WARREN_API_TOKEN",
+			"CANOPY_REPO_URL",
+			"canopy_clone",
+			"canopy_clean",
+			"projects_root",
+			"bwrap",
+			"burrow_reachable",
+		]);
 	});
 });
