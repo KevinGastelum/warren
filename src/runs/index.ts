@@ -7,9 +7,26 @@
 export { type ParsedBurrowConfig, parseBurrowConfig } from "./burrow_config.ts";
 export { RunSpawnError } from "./errors.ts";
 export {
+	DEFAULT_SUBSCRIPTION_BUFFER,
+	RunEventBroker,
+	type SubscribeOptions,
+	type TailRunEventsInput,
+	tailRunEvents,
+} from "./events.ts";
+export {
 	type SeedBurrowWorkspaceInput,
 	type SeedBurrowWorkspaceResult,
 	type SeedFs,
 	seedBurrowWorkspace,
 } from "./seed.ts";
 export { type SpawnRunInput, type SpawnRunResult, spawnRun } from "./spawn.ts";
+export {
+	type ActiveBridge,
+	type BridgeLogger,
+	type BridgeRunStreamInput,
+	type BridgeRunStreamResult,
+	bridgeRunStream,
+	type RecoverActiveRunStreamsInput,
+	type RecoverActiveRunStreamsResult,
+	recoverActiveRunStreams,
+} from "./stream.ts";
