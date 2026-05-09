@@ -223,6 +223,59 @@ describe("bridgeRunStream", () => {
 		// a clean stop or an AbortError; both are acceptable here.
 	});
 
+	test("first event transitions run queued → running and sets startedAt", async () => {
+		const before = repos.runs.require(runId);
+		expect(before.state).toBe("queued");
+		expect(before.startedAt).toBeNull();
+
+		await bridgeRunStream({
+			runId,
+			burrowRunId,
+			repos,
+			broker,
+			burrowClient: makeBurrowClient(),
+			source: source([evt(burrowRunId, 1)]),
+		});
+
+		const after = repos.runs.require(runId);
+		expect(after.state).toBe("running");
+		expect(after.startedAt).not.toBeNull();
+	});
+
+	test("does not transition state when source yields no events", async () => {
+		await bridgeRunStream({
+			runId,
+			burrowRunId,
+			repos,
+			broker,
+			burrowClient: makeBurrowClient(),
+			source: source([]),
+		});
+		const after = repos.runs.require(runId);
+		expect(after.state).toBe("queued");
+		expect(after.startedAt).toBeNull();
+	});
+
+	test("claim is a no-op when run is already running (resume after restart)", async () => {
+		const startedAt = new Date(2026, 0, 1).toISOString();
+		repos.runs.markRunning(runId, new Date(startedAt));
+		const before = repos.runs.require(runId);
+
+		await bridgeRunStream({
+			runId,
+			burrowRunId,
+			repos,
+			broker,
+			burrowClient: makeBurrowClient(),
+			source: source([evt(burrowRunId, 1)]),
+		});
+
+		const after = repos.runs.require(runId);
+		expect(after.state).toBe("running");
+		// startedAt was not overwritten by a second claim attempt.
+		expect(after.startedAt).toBe(before.startedAt);
+	});
+
 	test("bridge end calls broker.close so live subscribers return", async () => {
 		const sub = broker.subscribe(runId);
 		const out: number[] = [];

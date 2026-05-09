@@ -18,9 +18,14 @@
  * The bridge swallows transport-layer errors (BurrowUnreachableError
  * et al.) and just returns; it logs the failure if a logger was
  * supplied. The supervising layer (Phase 9 HTTP server, Phase 12
- * supervisor) is responsible for restart policy. We deliberately do
- * NOT touch the warren `runs.state` machine here — that lifecycle is
- * Phase 7's reap concern. The bridge is purely an event courier.
+ * supervisor) is responsible for restart policy.
+ *
+ * State mirroring is intentionally limited to the queued → running
+ * edge: as soon as the bridge sees its first event from burrow, it
+ * atomically claims the warren row via `RunsRepo.claimById` so HTTP
+ * clients polling `/runs/:id` stop seeing 'queued' while the agent is
+ * actively working. Terminal transitions still belong to Phase 7
+ * (reap); the bridge never finalizes a run.
  *
  * Restart recovery. `recoverActiveRunStreams` walks the runs table for
  * rows in {queued, running} that already have a `burrow_run_id`, and
@@ -92,10 +97,18 @@ export async function bridgeRunStream(input: BridgeRunStreamInput): Promise<Brid
 	let written = 0;
 	let skipped = 0;
 	let errored = false;
+	let claimed = false;
 
 	try {
 		for await (const event of source(ctrl.signal)) {
 			if (ctrl.signal.aborted) break;
+			if (!claimed) {
+				const claimedRun = repos.runs.claimById(runId);
+				if (claimedRun !== null) {
+					input.logger?.info?.({ runId, burrowRunId }, "bridge transitioned run queued → running");
+				}
+				claimed = true;
+			}
 			if (event.seq <= resumeSeq) {
 				skipped += 1;
 				continue;
