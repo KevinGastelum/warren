@@ -8,10 +8,6 @@
 		"wr": "./src/cli/main.ts"
 	},
 	"main": "src/index.ts",
-	"files": ["src"],
-	"publishConfig": {
-		"access": "public"
-	},
 	"engines": {
 		"bun": ">=1.1.0"
 	},
