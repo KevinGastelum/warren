@@ -349,6 +349,12 @@ export const DEFAULT_BURROW_SOCKET = "/var/run/burrow.sock";
  *   WARREN_BURROW_SOCKET   socket the supervisor binds burrow to (and warren
  *                          reaches it through). Default: /var/run/burrow.sock
  *   WARREN_BURROW_BIN      burrow binary on PATH. Default: "burrow".
+ *   WARREN_BURROW_NO_AUTH  "1"/"true" appends --no-auth to `burrow serve` so
+ *                          warren can boot on a loopback-only dev box without
+ *                          BURROW_API_TOKEN. Default: off.
+ *   WARREN_BURROW_ARGS     extra whitespace-separated args appended to
+ *                          `burrow serve` (after --no-auth, if any). Use for
+ *                          flags warren doesn't yet model explicitly.
  *   WARREN_SUPERVISOR_BUN  bun binary on PATH for spawning warren.
  *                          Default: "bun".
  *   WARREN_SERVER_ENTRY    path to warren's server entry. Default:
@@ -360,11 +366,27 @@ export function resolveCommandFromEnv(opts: ResolveCommandOptions = {}): Resolve
 	const burrowBin = env.WARREN_BURROW_BIN ?? "burrow";
 	const bunBin = env.WARREN_SUPERVISOR_BUN ?? "bun";
 	const serverEntry = env.WARREN_SERVER_ENTRY ?? "src/server/main.ts";
+	const burrowCmd: string[] = [burrowBin, "serve", "--socket", socketPath];
+	if (parseBoolEnv(env.WARREN_BURROW_NO_AUTH)) burrowCmd.push("--no-auth");
+	const extraArgs = parseArgsEnv(env.WARREN_BURROW_ARGS);
+	if (extraArgs.length > 0) burrowCmd.push(...extraArgs);
 	return {
 		socketPath,
-		burrowCmd: [burrowBin, "serve", "--socket", socketPath],
+		burrowCmd,
 		warrenCmd: [bunBin, "run", serverEntry],
 	};
+}
+
+function parseBoolEnv(raw: string | undefined): boolean {
+	if (raw === undefined) return false;
+	return raw === "1" || raw.toLowerCase() === "true";
+}
+
+function parseArgsEnv(raw: string | undefined): string[] {
+	if (raw === undefined) return [];
+	const trimmed = raw.trim();
+	if (trimmed === "") return [];
+	return trimmed.split(/\s+/);
 }
 
 if (import.meta.main) {

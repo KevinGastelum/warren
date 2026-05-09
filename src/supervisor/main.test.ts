@@ -383,6 +383,62 @@ describe("resolveCommandFromEnv", () => {
 		]);
 		expect(cmd.warrenCmd).toEqual(["/opt/bun/bin/bun", "run", "dist/server.js"]);
 	});
+
+	test("WARREN_BURROW_NO_AUTH=1 appends --no-auth", () => {
+		const cmd = resolveCommandFromEnv({ env: { WARREN_BURROW_NO_AUTH: "1" } });
+		expect(cmd.burrowCmd).toEqual([
+			"burrow",
+			"serve",
+			"--socket",
+			"/var/run/burrow.sock",
+			"--no-auth",
+		]);
+	});
+
+	test("WARREN_BURROW_NO_AUTH accepts 'true' (case-insensitive)", () => {
+		const cmd = resolveCommandFromEnv({ env: { WARREN_BURROW_NO_AUTH: "TRUE" } });
+		expect(cmd.burrowCmd).toContain("--no-auth");
+	});
+
+	test("WARREN_BURROW_NO_AUTH=0 leaves the command unchanged", () => {
+		const cmd = resolveCommandFromEnv({ env: { WARREN_BURROW_NO_AUTH: "0" } });
+		expect(cmd.burrowCmd).not.toContain("--no-auth");
+	});
+
+	test("WARREN_BURROW_ARGS splits on whitespace and appends", () => {
+		const cmd = resolveCommandFromEnv({
+			env: { WARREN_BURROW_ARGS: "--log-level debug --max-runs 4" },
+		});
+		expect(cmd.burrowCmd).toEqual([
+			"burrow",
+			"serve",
+			"--socket",
+			"/var/run/burrow.sock",
+			"--log-level",
+			"debug",
+			"--max-runs",
+			"4",
+		]);
+	});
+
+	test("empty WARREN_BURROW_ARGS is treated as absent", () => {
+		const cmd = resolveCommandFromEnv({ env: { WARREN_BURROW_ARGS: "   " } });
+		expect(cmd.burrowCmd).toEqual(["burrow", "serve", "--socket", "/var/run/burrow.sock"]);
+	});
+
+	test("WARREN_BURROW_NO_AUTH and WARREN_BURROW_ARGS compose, with --no-auth first", () => {
+		const cmd = resolveCommandFromEnv({
+			env: { WARREN_BURROW_NO_AUTH: "1", WARREN_BURROW_ARGS: "--verbose" },
+		});
+		expect(cmd.burrowCmd).toEqual([
+			"burrow",
+			"serve",
+			"--socket",
+			"/var/run/burrow.sock",
+			"--no-auth",
+			"--verbose",
+		]);
+	});
 });
 
 /** Drain the microtask queue several turns. Several awaits in the supervisor
