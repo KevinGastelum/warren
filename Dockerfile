@@ -44,7 +44,7 @@ RUN apt-get update \
 # Versions track each tool's current release; bumping them is a deliberate
 # image-rebuild decision.
 RUN bun install -g \
-    @os-eco/burrow-cli@0.2.1 \
+    @os-eco/burrow-cli@0.2.2 \
     @os-eco/canopy-cli@0.2.3 \
     @os-eco/seeds-cli@0.4.1 \
     @os-eco/mulch-cli@0.8.0 \
