@@ -34,8 +34,9 @@ import { type BootHandle, bootInProc } from "./lib/inproc.ts";
 
 import { scenario as scenario01 } from "./scenarios/01-boot-healthz-readyz.ts";
 import { scenario as scenario02 } from "./scenarios/02-agents-refresh.ts";
+import { scenario as scenario03 } from "./scenarios/03-projects-management.ts";
 
-const SCENARIOS: readonly Scenario[] = [scenario01, scenario02];
+const SCENARIOS: readonly Scenario[] = [scenario01, scenario02, scenario03];
 
 interface ParsedArgs {
 	readonly mode: BootMode;
