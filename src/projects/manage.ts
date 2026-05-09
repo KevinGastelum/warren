@@ -9,10 +9,15 @@
  *     "neither" — clone failure rolls back, db conflict short-circuits
  *     before anything touches disk, and a row is only inserted after
  *     `git clone` returns success.
- *   - deleteProject removes the on-disk clone *first* and only
- *     unregisters the row if rm succeeds. Operator gets a clear error
- *     and a still-listed project they can retry on, rather than a
- *     ghost-row pointing at half a directory.
+ *   - deleteProject removes the row *first*, then best-effort rms the
+ *     on-disk clone (warren-5f19). The row delete and the
+ *     `runs.project_id` SET-NULL cascade run as a single SQLite
+ *     statement, so any concurrent referent (in-flight runs, history)
+ *     is updated atomically. If the disk rmrf fails after the row is
+ *     gone, the operator gets a logged warning and a stranded
+ *     directory under the projects root — better than the prior
+ *     ordering, where a row could remain pointing at a deleted
+ *     directory and wedge subsequent dispatches against the project.
  *
  * The `localPath` returned by the clone is re-validated against the
  * configured projects root before any rm: defense-in-depth so a
@@ -25,6 +30,7 @@ import { resolve, sep } from "node:path";
 import { ValidationError } from "../core/errors.ts";
 import type { ProjectsRepo } from "../db/repos/projects.ts";
 import type { ProjectRow } from "../db/schema.ts";
+import type { BridgeLogger } from "../runs/stream.ts";
 import {
 	type CloneProjectResult,
 	cloneProjectRepo,
@@ -129,6 +135,8 @@ export interface DeleteProjectInput {
 	/** Filesystem probes — overrideable for tests. */
 	readonly exists?: (path: string) => boolean;
 	readonly rmrf?: (path: string) => Promise<void>;
+	/** Optional structured logger; warnings about stranded clones go here. */
+	readonly logger?: BridgeLogger;
 }
 
 export async function deleteProject(input: DeleteProjectInput): Promise<ProjectRow> {
@@ -139,18 +147,25 @@ export async function deleteProject(input: DeleteProjectInput): Promise<ProjectR
 	const row = repo.require(id);
 	assertPathUnderRoot(row.localPath, config.root);
 
+	// Row first. The FK on `runs.project_id` is `ON DELETE SET NULL`, so
+	// SQLite atomically orphans every referencing run inside the same
+	// implicit transaction. Doing this before the disk rm guarantees we
+	// never leave a `projects` row pointing at a missing directory —
+	// that combination wedged subsequent dispatches against the project
+	// (warren-5f19).
+	repo.delete(id);
+
 	if (exists(row.localPath)) {
 		try {
 			await rmrf(row.localPath);
 		} catch (err) {
-			throw new ProjectUnavailableError(`failed to remove ${row.localPath}: ${formatError(err)}`, {
-				cause: err,
-				recoveryHint: "check filesystem permissions and free space; the project remains registered",
-			});
+			input.logger?.warn?.(
+				{ projectId: id, localPath: row.localPath, err: formatError(err) },
+				"deleteProject: row removed but disk rmrf failed; stranded clone left for manual cleanup",
+			);
 		}
 	}
 
-	repo.delete(id);
 	return row;
 }
 

@@ -37,7 +37,12 @@ export interface RefreshProjectResponse {
 export interface RunRow {
 	id: string;
 	agentName: string;
-	projectId: string;
+	/**
+	 * Null when the project was deleted after the run was created
+	 * (warren-5f19). The FK is `ON DELETE SET NULL`, so run history
+	 * survives a project delete as orphan rows.
+	 */
+	projectId: string | null;
 	burrowId: string | null;
 	burrowRunId: string | null;
 	renderedAgentJson: unknown;

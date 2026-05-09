@@ -65,7 +65,11 @@ export function RunDetailPage() {
 					</div>
 					<p className="mt-1 text-sm text-(--color-muted-foreground)">
 						<span className="font-medium">{r.agentName}</span> ·{" "}
-						<span className="font-mono">{r.projectId}</span>
+						{r.projectId === null ? (
+							<span className="italic">(deleted project)</span>
+						) : (
+							<span className="font-mono">{r.projectId}</span>
+						)}
 					</p>
 				</div>
 				<div className="flex gap-2">

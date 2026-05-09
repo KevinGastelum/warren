@@ -69,9 +69,13 @@ export const runs = sqliteTable(
 		agentName: text("agent_name")
 			.notNull()
 			.references(() => agents.name),
-		projectId: text("project_id")
-			.notNull()
-			.references(() => projects.id),
+		// Nullable + ON DELETE SET NULL so deleting a project orphans its
+		// runs instead of being blocked by the FK. The UI's delete-project
+		// dialog promises 'Run history for this project is kept' (warren-5f19);
+		// before this change, an FK constraint failure on delete combined
+		// with the disk-first ordering in deleteProject left the project
+		// row orphaned from its on-disk clone.
+		projectId: text("project_id").references(() => projects.id, { onDelete: "set null" }),
 		burrowId: text("burrow_id"),
 		burrowRunId: text("burrow_run_id"),
 		renderedAgentJson: text("rendered_agent_json", { mode: "json" }).notNull(),

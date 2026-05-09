@@ -170,7 +170,14 @@ export async function reapRun(input: ReapRunInput): Promise<ReapRunResult> {
 	// "burrow never started the run" failure rather than a real crash.
 	const stateOnEntry = run.state;
 
-	const project = input.repos.projects.require(run.projectId);
+	// `run.projectId` is null when the project was deleted while the run
+	// existed (warren-5f19): the FK is `ON DELETE SET NULL`, so the run
+	// row survives the delete as an orphan. We can still finalize the
+	// state (the events were already streamed), but the mulch-merge,
+	// seeds-close, and branch-push sub-steps target the project clone on
+	// disk, which is gone. Skip them and emit a single system event so
+	// operators can see why reap was a no-op.
+	const project = run.projectId !== null ? input.repos.projects.get(run.projectId) : null;
 	const seq = createSeqAllocator(input.repos.events.maxSeqForRun(run.id) ?? 0);
 	const errors: ReapStepError[] = [];
 	const emit = (kind: string, payload: unknown): EventRow => {
@@ -216,7 +223,7 @@ export async function reapRun(input: ReapRunInput): Promise<ReapRunResult> {
 		}
 	}
 
-	if (workspacePath !== null) {
+	if (workspacePath !== null && project !== null) {
 		try {
 			const result = await mergeMulch(workspacePath, project.localPath, fs, emit, fail);
 			mulchUpdated = result.updated;
@@ -241,6 +248,11 @@ export async function reapRun(input: ReapRunInput): Promise<ReapRunResult> {
 		} catch (err) {
 			fail("branch_push", err, workspacePath);
 		}
+	} else if (workspacePath !== null && project === null) {
+		emit("reap.orphaned", {
+			projectId: run.projectId,
+			message: "project was deleted; skipping mulch merge, seeds close, and branch push",
+		});
 	}
 
 	const failureReason: RunFailureReason | null =

@@ -121,7 +121,13 @@ export function RunsPage() {
 										</TableCell>
 										<TableCell>{r.agentName}</TableCell>
 										<TableCell className="font-mono text-xs">
-											{projectIndex.get(r.projectId) ?? r.projectId}
+											{r.projectId === null ? (
+												<span className="italic text-(--color-muted-foreground)">
+													(deleted project)
+												</span>
+											) : (
+												(projectIndex.get(r.projectId) ?? r.projectId)
+											)}
 										</TableCell>
 										<TableCell className="text-(--color-muted-foreground)">
 											{relativeTime(r.startedAt)}
