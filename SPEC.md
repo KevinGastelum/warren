@@ -525,6 +525,10 @@ Documented, accepted for V1:
 
 These are limitations for V1, not bugs. V2 candidates: token-pair (read/write), per-token scopes, audit log.
 
+### 11.E First-run validation (2026-05-09)
+
+The §4.3 composition flow was exercised end-to-end against a real claude-code agent for the first time. Three architectural gaps in burrow surfaced and shipped fixes in the same session: `burrow-7b97` (`burrow serve` had no in-process executor — runs queued forever; fixed by wiring `RunDispatcher` into `startServer` and hooking `RunsClient.setOnCreated`), `burrow-55e3` (HTTP `burrows.up` ignored agent-id hints, leaving `toolchainPaths: []`; fixed by accepting `agents` on `HttpBurrowUpInput` and threading through `resolveEffectiveAgents` — paired with warren's spawn forwarding `agents: [agent.name]`), and `burrow-0329` (`buildBwrapArgv` lacked `--uid`/`--gid`, so the sandboxed process inherited host root and claude-code refused to run with `--dangerously-skip-permissions`). Warren-side fixes were narrower: bumping `@os-eco/burrow-cli` in **both** `Dockerfile` and `package.json` + `bun.lock` (the supervisor's `Bun.spawn` resolves `./node_modules/.bin/burrow` before PATH, so a Dockerfile-only bump is a no-op), bundling `@anthropic-ai/claude-code` with an explicit postinstall invocation (`bun install -g` skips lifecycle scripts), and a compose-time `CANOPY_SOURCE_DIR` bind mount for local-canopy testing. With burrow at `0.2.3`, a `warren run claude-code <prj> -p "..."` against warren itself completes in ~5s with `state: succeeded`, `branchPushed: true`, and a real model response in `run.event seq:4`. Outstanding gaps for V1 (all open warren seeds): the supervisor doesn't auto-wire `GITHUB_TOKEN` into git's credential helper (`warren-dcf3`), the supervisor offers no `--no-auth` knob for burrow loopback dev (`warren-93ee`), the `warren` CLI isn't on `PATH` inside the container (`warren-fab1`), the reap step can't distinguish "queued, never started" from "crashed" (`warren-3c40`), and the runtime image lacks `curl` for diagnostics (`warren-bd69`).
+
 ---
 
 ## 12. Relationship to other os-eco tools
