@@ -98,7 +98,7 @@ export function RunDetailPage() {
 					<CardTitle>Prompt</CardTitle>
 				</CardHeader>
 				<CardContent>
-					<pre className="whitespace-pre-wrap rounded-md bg-(--color-muted) p-3 text-sm">
+					<pre className="whitespace-pre-wrap break-words rounded-md bg-(--color-muted) p-3 text-sm">
 						{r.prompt}
 					</pre>
 				</CardContent>
