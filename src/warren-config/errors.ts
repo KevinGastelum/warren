@@ -1,0 +1,39 @@
+/**
+ * Errors specific to the per-project `.warren/` config module (R-02).
+ *
+ * `WarrenConfigUnavailableError` covers filesystem failures: project clone
+ * vanished, `.warren/` unreadable due to permissions, etc. Maps to a 503 at
+ * the warren HTTP boundary — the right operator action is "fix the host"
+ * rather than "retry the request".
+ *
+ * Per-file parse and schema failures are NOT thrown — the loader collects
+ * them as structured `WarrenConfigFileError` entries so a single malformed
+ * file (triggers.yaml) doesn't hide a healthy sibling (defaults.json) from
+ * the operator. Callers (HTTP, doctor, UI) render the errors envelope
+ * verbatim.
+ */
+
+import { WarrenError } from "../core/errors.ts";
+
+export class WarrenConfigUnavailableError extends WarrenError {
+	readonly code = "warren_config_unavailable";
+}
+
+/**
+ * Stable codes for per-file failures collected by the loader. Surfaced to
+ * the HTTP/UI/doctor layers; treat as a public contract.
+ */
+export const WARREN_CONFIG_FILE_ERROR_CODES = {
+	parseError: "warren_config_parse_error",
+	schemaError: "warren_config_schema_error",
+} as const;
+
+export type WarrenConfigFileErrorCode =
+	(typeof WARREN_CONFIG_FILE_ERROR_CODES)[keyof typeof WARREN_CONFIG_FILE_ERROR_CODES];
+
+export interface WarrenConfigFileError {
+	/** Project-relative path, e.g. `.warren/triggers.yaml`. */
+	readonly file: string;
+	readonly code: WarrenConfigFileErrorCode;
+	readonly message: string;
+}
