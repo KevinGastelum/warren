@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { SpawnFn } from "../projects/clone.ts";
-import { checkBwrap, checkCanopyClean, checkCanopyClone } from "./checks.ts";
+import { type LoadedWarrenConfig, WarrenConfigUnavailableError } from "../warren-config/index.ts";
+import { checkBwrap, checkCanopyClean, checkCanopyClone, checkWarrenConfig } from "./checks.ts";
 
 const captureSpawnCalls = (
 	results: Record<string, { stdout?: string; stderr?: string; exitCode: number }>,
@@ -157,5 +158,120 @@ describe("checkCanopyClean", () => {
 			exists: () => true,
 		});
 		expect(calls[0]?.cmd[0]).toBe("/opt/git");
+	});
+});
+
+describe("checkWarrenConfig", () => {
+	const empty: LoadedWarrenConfig = { triggers: null, defaults: null, errors: [] };
+	const valid: LoadedWarrenConfig = {
+		triggers: [],
+		defaults: { defaultBranch: "main" },
+		errors: [],
+	};
+
+	test("ok with informational message when no projects registered", async () => {
+		const result = await checkWarrenConfig({ projects: [] });
+		expect(result.name).toBe("warren_config");
+		expect(result.ok).toBe(true);
+		expect(result.message).toContain("no projects registered");
+	});
+
+	test("ok when every project's .warren/ is absent or valid (covers states 1+2)", async () => {
+		const calls: string[] = [];
+		const result = await checkWarrenConfig({
+			projects: [
+				{ id: "prj_absent", localPath: "/clones/a" },
+				{ id: "prj_valid", localPath: "/clones/b" },
+			],
+			load: async (path) => {
+				calls.push(path);
+				return path === "/clones/a" ? empty : valid;
+			},
+		});
+		expect(calls).toEqual(["/clones/a", "/clones/b"]);
+		expect(result.ok).toBe(true);
+		expect(result.message).toContain("2 project(s) checked");
+	});
+
+	test("fails with file paths when any project's .warren/ is malformed (state 3)", async () => {
+		const malformed: LoadedWarrenConfig = {
+			triggers: null,
+			defaults: { defaultBranch: "main" },
+			errors: [
+				{
+					file: ".warren/triggers.yaml",
+					code: "warren_config_parse_error",
+					message: "YAML parse error: bad indent",
+				},
+			],
+		};
+		const result = await checkWarrenConfig({
+			projects: [
+				{ id: "prj_ok", localPath: "/clones/a" },
+				{ id: "prj_bad", localPath: "/clones/b" },
+			],
+			load: async (path) => (path === "/clones/a" ? valid : malformed),
+		});
+		expect(result.ok).toBe(false);
+		expect(result.message).toContain("prj_bad .warren/triggers.yaml");
+		expect(result.message).toContain("YAML parse error");
+		expect(result.hint).toContain("/refresh");
+	});
+
+	test("fails when a project clone has vanished (WarrenConfigUnavailableError)", async () => {
+		const result = await checkWarrenConfig({
+			projects: [{ id: "prj_gone", localPath: "/clones/missing" }],
+			load: async () => {
+				throw new WarrenConfigUnavailableError("project clone missing on disk: /clones/missing");
+			},
+		});
+		expect(result.ok).toBe(false);
+		expect(result.message).toContain("prj_gone");
+		expect(result.message).toContain("clone missing");
+	});
+
+	test("aggregates errors across many projects", async () => {
+		const malformed: LoadedWarrenConfig = {
+			triggers: null,
+			defaults: null,
+			errors: [
+				{
+					file: ".warren/defaults.json",
+					code: "warren_config_schema_error",
+					message: "branch: required",
+				},
+			],
+		};
+		const result = await checkWarrenConfig({
+			projects: [
+				{ id: "p1", localPath: "/c/p1" },
+				{ id: "p2", localPath: "/c/p2" },
+				{ id: "p3", localPath: "/c/p3" },
+			],
+			load: async (path) => (path === "/c/p2" ? malformed : valid),
+		});
+		expect(result.ok).toBe(false);
+		expect(result.message).toContain("1 .warren/ failure(s) across 3 project(s)");
+		expect(result.message).toContain("p2 .warren/defaults.json");
+	});
+
+	test("reads through the cache when supplied (shares parses with HTTP surface)", async () => {
+		const seen: { id: string; path: string }[] = [];
+		const cache = {
+			get: async (id: string, path: string): Promise<LoadedWarrenConfig> => {
+				seen.push({ id, path });
+				return valid;
+			},
+			invalidate: () => undefined,
+			clear: () => undefined,
+			size: () => 0,
+		};
+		const result = await checkWarrenConfig({
+			projects: [{ id: "prj_a", localPath: "/c/a" }],
+			cache,
+			load: async () => empty, // ignored when cache is supplied
+		});
+		expect(seen).toEqual([{ id: "prj_a", path: "/c/a" }]);
+		expect(result.ok).toBe(true);
 	});
 });

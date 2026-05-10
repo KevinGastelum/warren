@@ -34,6 +34,7 @@ import {
 	checkBwrap,
 	checkCanopyClean,
 	checkCanopyClone,
+	checkWarrenConfig,
 	type DiagnosticCheck,
 } from "../diagnostics/checks.ts";
 import type { SpawnFn, SpawnOptions, SpawnResult } from "../projects/clone.ts";
@@ -518,6 +519,15 @@ function readyz(deps: ServerDeps): RouteHandler {
 		checks.push(checkCanopyClone({ env }));
 		checks.push(await checkCanopyClean({ env, spawn }));
 		checks.push(await checkBwrap({ spawn }));
+		checks.push(
+			await checkWarrenConfig({
+				projects: deps.repos.projects.listAll().map((p) => ({
+					id: p.id,
+					localPath: p.localPath,
+				})),
+				...(deps.warrenConfigs !== undefined ? { cache: deps.warrenConfigs } : {}),
+			}),
+		);
 
 		const allOk = checks.every((c) => c.ok);
 		return jsonResponse(allOk ? 200 : 503, {

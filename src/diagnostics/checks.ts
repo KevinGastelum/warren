@@ -21,6 +21,12 @@ import type { BurrowClient } from "../burrow-client/client.ts";
 import { withTransportMapping } from "../burrow-client/client.ts";
 import type { SpawnFn } from "../projects/clone.ts";
 import { type CanopyRegistryConfig, loadCanopyRegistryConfigFromEnv } from "../registry/config.ts";
+import {
+	type LoadedWarrenConfig,
+	loadWarrenConfig,
+	type WarrenConfigCache,
+	WarrenConfigUnavailableError,
+} from "../warren-config/index.ts";
 
 export interface DiagnosticCheck {
 	readonly name: string;
@@ -187,6 +193,84 @@ export async function checkCanopyClean(deps: {
 			hint: "POST /agents/refresh to hard-reset the canopy clone to origin/HEAD",
 		};
 	}
+}
+
+/**
+ * Walk every registered project, parse its `.warren/` directory, and
+ * fail if any project's config is malformed or its clone has vanished.
+ * Absent `.warren/` is the bootstrap shape (acceptance #5 covers all
+ * three states: absent, valid, malformed) — those projects count as
+ * "checked" but contribute nothing to the failure list.
+ *
+ * Reads through the `WarrenConfigCache` when one is supplied so the
+ * doctor + readyz surfaces share parses with `GET /projects/:id/warren-config`
+ * — invalidation already happens in refreshProject/deleteProject, so
+ * the cache will not pin stale parse output across a project lifecycle.
+ * Tests inject `load` directly to skip the cache.
+ */
+export interface WarrenConfigCheckProject {
+	readonly id: string;
+	readonly localPath: string;
+}
+
+export interface CheckWarrenConfigDeps {
+	readonly projects: ReadonlyArray<WarrenConfigCheckProject>;
+	readonly cache?: WarrenConfigCache;
+	/** Override the loader (tests). Ignored when `cache` is supplied. */
+	readonly load?: (projectPath: string) => Promise<LoadedWarrenConfig>;
+}
+
+export async function checkWarrenConfig(deps: CheckWarrenConfigDeps): Promise<DiagnosticCheck> {
+	if (deps.projects.length === 0) {
+		return {
+			name: "warren_config",
+			ok: true,
+			message: "no projects registered",
+		};
+	}
+
+	const failures: string[] = [];
+	let validated = 0;
+
+	for (const project of deps.projects) {
+		let loaded: LoadedWarrenConfig;
+		try {
+			loaded =
+				deps.cache !== undefined
+					? await deps.cache.get(project.id, project.localPath)
+					: await (deps.load ?? defaultWarrenConfigLoad)(project.localPath);
+		} catch (err) {
+			if (err instanceof WarrenConfigUnavailableError) {
+				failures.push(`${project.id}: ${err.message}`);
+				continue;
+			}
+			failures.push(`${project.id}: ${err instanceof Error ? err.message : String(err)}`);
+			continue;
+		}
+		validated += 1;
+		for (const fileError of loaded.errors) {
+			failures.push(`${project.id} ${fileError.file}: ${fileError.message}`);
+		}
+	}
+
+	if (failures.length > 0) {
+		return {
+			name: "warren_config",
+			ok: false,
+			message: `${failures.length} .warren/ failure(s) across ${deps.projects.length} project(s): ${failures.join("; ")}`,
+			hint: "fix the offending .warren/ files in the project repo and POST /projects/:id/refresh",
+		};
+	}
+
+	return {
+		name: "warren_config",
+		ok: true,
+		message: `${validated} project(s) checked, no .warren/ failures`,
+	};
+}
+
+function defaultWarrenConfigLoad(projectPath: string): Promise<LoadedWarrenConfig> {
+	return loadWarrenConfig({ projectPath });
 }
 
 /**

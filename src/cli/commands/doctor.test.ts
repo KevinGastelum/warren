@@ -189,7 +189,7 @@ describe("runDoctor", () => {
 		expect(clean?.hint).toContain("/agents/refresh");
 	});
 
-	test("emits all six expected check names", async () => {
+	test("emits all expected check names in order", async () => {
 		const { context } = captureContext({
 			WARREN_API_TOKEN: "tok",
 			CANOPY_REPO_URL: "https://example.com/agents.git",
@@ -210,7 +210,26 @@ describe("runDoctor", () => {
 			"canopy_clean",
 			"projects_root",
 			"bwrap",
+			"warren_config",
 			"burrow_reachable",
 		]);
+	});
+
+	test("warren_config is ok with no projects registered", async () => {
+		const { context } = captureContext({
+			WARREN_API_TOKEN: "tok",
+			CANOPY_REPO_URL: "https://example.com/agents.git",
+		});
+		const result = await runDoctor(
+			context,
+			{
+				existsSync: () => true,
+				probeBurrow: async () => undefined,
+			},
+			{},
+		);
+		const wc = result.checks.find((c: DoctorCheck) => c.name === "warren_config");
+		expect(wc?.ok).toBe(true);
+		expect(wc?.message).toContain("no projects registered");
 	});
 });

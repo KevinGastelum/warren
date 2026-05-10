@@ -7,6 +7,7 @@
  *   - canopy clone is "clean" (no working-tree mutations — Phase 13),
  *   - bwrap binary reachable (Phase 13),
  *   - projects root resolvable (non-fatal),
+ *   - per-project `.warren/` config validity (R-02, pl-5d74 step 6),
  *   - burrow socket reachable.
  *
  * The Phase-13 probes (bwrap + canopy_clean) live in
@@ -24,7 +25,9 @@ import {
 	checkBwrap,
 	checkCanopyClean,
 	checkCanopyClone,
+	checkWarrenConfig,
 	type DiagnosticCheck,
+	type WarrenConfigCheckProject,
 } from "../../diagnostics/checks.ts";
 import { loadProjectsConfigFromEnv } from "../../projects/config.ts";
 import type { CliContext, EnvLike } from "../output.ts";
@@ -41,6 +44,14 @@ export interface DoctorDeps {
 	readonly probeBurrow?: (env: EnvLike) => Promise<void>;
 	/** Override `existsSync` (tests). */
 	readonly existsSync?: (path: string) => boolean;
+	/**
+	 * Registered projects to validate `.warren/` against. `main.ts` wires
+	 * this from the live projects table via `withCliDb`; tests pass a
+	 * synthetic list (or omit for an empty registry). When the list is
+	 * empty the warren_config check still runs and reports an
+	 * informational `ok: true`.
+	 */
+	readonly projects?: ReadonlyArray<WarrenConfigCheckProject>;
 }
 
 export interface DoctorResult {
@@ -65,6 +76,8 @@ export async function runDoctor(
 	checks.push(projectsRootCheck(context.env, exists));
 
 	checks.push(await checkBwrap({ spawn: context.spawn }));
+
+	checks.push(await checkWarrenConfig({ projects: deps.projects ?? [] }));
 
 	checks.push(await burrowCheck(context.env, deps.probeBurrow));
 

@@ -120,8 +120,19 @@ export function buildProgram(context: CliContext): Command {
 		.option("--no-auth", "skip the WARREN_API_TOKEN check (loopback dev mode)")
 		.action(async (opts: { auth?: boolean }) => {
 			// commander turns `--no-auth` into `opts.auth === false`.
-			const result = await runDoctor(context, {}, { noAuth: opts.auth === false });
-			process.exit(result.exitCode);
+			// Open the DB so the warren_config check can walk every
+			// registered project. A missing DB file is fine — withCliDb's
+			// openDatabase creates one on first use; an empty projects
+			// table produces an informational `ok: true`.
+			const exitCode = await withCliDb({ env: context.env }, async ({ repos }) => {
+				const projects = repos.projects.listAll().map((p) => ({
+					id: p.id,
+					localPath: p.localPath,
+				}));
+				const result = await runDoctor(context, { projects }, { noAuth: opts.auth === false });
+				return result.exitCode;
+			});
+			process.exit(exitCode);
 		});
 
 	program

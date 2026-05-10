@@ -350,6 +350,7 @@ describe("startServer — routes", () => {
 			expect(names).toContain("canopy_clone");
 			expect(names).toContain("canopy_clean");
 			expect(names).toContain("bwrap");
+			expect(names).toContain("warren_config");
 			expect(body.checks.find((c) => c.name === "agents")?.ok).toBe(false);
 			expect(body.checks.find((c) => c.name === "canopy_clone")?.ok).toBe(false);
 		} finally {
