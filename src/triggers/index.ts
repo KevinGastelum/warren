@@ -28,6 +28,7 @@ export {
 	type DispatchSpawnResult,
 	dispatchCronTrigger,
 	dispatchScheduledSeed,
+	resolveCronPrompt,
 } from "./dispatch.ts";
 export { SeedsCliError, TriggerDispatchError } from "./errors.ts";
 export {
@@ -49,6 +50,11 @@ export {
 	listScheduledSeeds,
 	type SeedsCliDeps,
 } from "./seeds-extension.ts";
+export {
+	type BuildTriggerSummariesInput,
+	buildTriggerSummaries,
+	type TriggerSummary,
+} from "./summary.ts";
 export {
 	type ClearScheduledForFn,
 	type ListScheduledSeedsFn,

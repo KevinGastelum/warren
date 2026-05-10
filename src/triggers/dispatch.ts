@@ -219,8 +219,11 @@ export async function dispatchScheduledSeed(
  * referencing the trigger's seed pointer. The fallback keeps the run
  * usable even when the project hasn't configured a defaultPrompt — full
  * template substitution lands in a follow-up.
+ *
+ * Exported so the HTTP "Run Now" route (warren-99c3) can dispatch a
+ * trigger inline with the same prompt resolution the scheduler uses.
  */
-function resolveCronPrompt(
+export function resolveCronPrompt(
 	trigger: CronTrigger,
 	defaults: DefaultsConfig | null | undefined,
 ): string {

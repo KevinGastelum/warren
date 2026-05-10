@@ -27,7 +27,7 @@
  */
 
 import type { MessagePriority } from "@os-eco/burrow-cli";
-import { ValidationError } from "../core/errors.ts";
+import { NotFoundError, ValidationError } from "../core/errors.ts";
 import type { AgentRow } from "../db/schema.ts";
 import {
 	checkBurrowReachable,
@@ -43,7 +43,12 @@ import { type AgentSource, readAgentSource } from "../registry/builtins/index.ts
 import { CanopyClient } from "../registry/canopy.ts";
 import { refreshAgentRegistry } from "../registry/refresh.ts";
 import { cancelRun, spawnRun, steerRun, tailRunEvents } from "../runs/index.ts";
-import { type LoadedWarrenConfig, loadWarrenConfig } from "../warren-config/index.ts";
+import { buildTriggerSummaries, parseCron, resolveCronPrompt } from "../triggers/index.ts";
+import {
+	type CronTrigger,
+	type LoadedWarrenConfig,
+	loadWarrenConfig,
+} from "../warren-config/index.ts";
 import { jsonResponse, ndjsonResponse } from "./response.ts";
 import type { Route, RouteContext, RouteHandler, ServerDeps } from "./types.ts";
 
@@ -266,6 +271,107 @@ function getProjectWarrenConfigHandler(deps: ServerDeps): RouteHandler {
 			triggers: loaded.triggers,
 			defaults: loaded.defaults,
 			errors: loaded.errors,
+		});
+	};
+}
+
+function getProjectTriggersHandler(deps: ServerDeps): RouteHandler {
+	return async (ctx) => {
+		const id = requireParam(ctx, "id");
+		const project = deps.repos.projects.require(id);
+		const loaded: LoadedWarrenConfig =
+			deps.warrenConfigs !== undefined
+				? await deps.warrenConfigs.get(project.id, project.localPath)
+				: await loadWarrenConfig({ projectPath: project.localPath });
+		const now = deps.now?.() ?? new Date();
+		const summaries = buildTriggerSummaries({
+			projectId: project.id,
+			triggers: loaded.triggers ?? [],
+			repo: deps.repos.triggers,
+			now,
+		});
+		return jsonResponse(200, {
+			triggers: summaries,
+			errors: loaded.errors,
+		});
+	};
+}
+
+function runProjectTriggerHandler(deps: ServerDeps): RouteHandler {
+	return async (ctx) => {
+		const id = requireParam(ctx, "id");
+		const triggerId = requireParam(ctx, "triggerId");
+
+		// Project 404 must come before warren-config load so a typo'd
+		// project id doesn't end up parsing some other project's YAML.
+		const project = deps.repos.projects.require(id);
+
+		const loaded: LoadedWarrenConfig =
+			deps.warrenConfigs !== undefined
+				? await deps.warrenConfigs.get(project.id, project.localPath)
+				: await loadWarrenConfig({ projectPath: project.localPath });
+
+		const trigger = (loaded.triggers ?? []).find((t): t is CronTrigger => t.id === triggerId);
+		if (trigger === undefined) {
+			throw new NotFoundError(
+				`trigger '${triggerId}' not found in .warren/triggers.yaml for project ${project.id}`,
+				{
+					recoveryHint:
+						"GET /projects/:id/triggers to list the triggers warren parsed from .warren/triggers.yaml",
+				},
+			);
+		}
+
+		const prompt = resolveCronPrompt(trigger, loaded.defaults);
+		const now = deps.now?.() ?? new Date();
+
+		const result = await spawnRun({
+			repos: deps.repos,
+			burrowClient: deps.burrowClient,
+			agentName: trigger.role,
+			projectId: project.id,
+			prompt,
+			trigger: "manual-trigger",
+			metadata: { triggerId: trigger.id, cron: trigger.cron, seed: trigger.seed },
+			...(deps.now !== undefined ? { now: deps.now } : {}),
+			projectsConfig: deps.projectsConfig,
+			projectSpawn: deps.spawn ?? defaultSpawn,
+			...(deps.warrenConfigs !== undefined ? { warrenConfigs: deps.warrenConfigs } : {}),
+		});
+
+		// Hand off to the bridge so events start flowing into warren.events —
+		// same posture as POST /runs (mx-…).
+		deps.bridges.start(result.run.id, result.burrowRun.id);
+
+		// Stamp the trigger row so the UI shows this manual fire as the most
+		// recent dispatch. Roll nextFireAt forward when the cron parses; on
+		// parse failure write last/run only so the persisted next-fire isn't
+		// silently zeroed.
+		const parseInput: { expression: string; timezone?: string } = {
+			expression: trigger.cron,
+			...(trigger.timezone !== undefined ? { timezone: trigger.timezone } : {}),
+		};
+		const parsed = parseCron(parseInput);
+		if (parsed.ok) {
+			deps.repos.triggers.recordFire({
+				projectId: project.id,
+				triggerId: trigger.id,
+				firedAt: now,
+				nextFireAt: parsed.cron.nextRun(now),
+				runId: result.run.id,
+			});
+		} else {
+			deps.repos.triggers.upsert({
+				projectId: project.id,
+				triggerId: trigger.id,
+				lastFiredAt: now.toISOString(),
+				lastRunId: result.run.id,
+			});
+		}
+
+		return jsonResponse(201, {
+			run: result.run,
+			burrow: { id: result.burrow.id, workspacePath: result.burrow.workspacePath },
 		});
 	};
 }
@@ -577,6 +683,12 @@ const ROUTE_TABLE: readonly RouteEntry[] = [
 	{ method: "GET", pattern: "/projects", build: listProjectsHandler },
 	{ method: "POST", pattern: "/projects", build: createProjectHandler },
 	{ method: "GET", pattern: "/projects/:id/warren-config", build: getProjectWarrenConfigHandler },
+	{ method: "GET", pattern: "/projects/:id/triggers", build: getProjectTriggersHandler },
+	{
+		method: "POST",
+		pattern: "/projects/:id/triggers/:triggerId/run",
+		build: runProjectTriggerHandler,
+	},
 	{ method: "POST", pattern: "/projects/:id/refresh", build: refreshProjectHandler },
 	{ method: "DELETE", pattern: "/projects/:id", build: deleteProjectHandler },
 

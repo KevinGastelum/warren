@@ -771,3 +771,338 @@ describe("GET /runs/:id/events — NDJSON tail", () => {
 		expect(res.status).toBe(404);
 	});
 });
+
+describe("GET /projects/:id/triggers — parsed YAML joined with scheduler state (warren-99c3)", () => {
+	let db: WarrenDb;
+	let repos: Repos;
+	let handle: ServeHandle | null = null;
+	let projectLocalPath = "";
+	let projectId = "";
+
+	beforeEach(async () => {
+		db = await openDatabase({ path: ":memory:" });
+		repos = createRepos(db);
+
+		const { mkdtemp } = await import("node:fs/promises");
+		const { tmpdir } = await import("node:os");
+		const { join } = await import("node:path");
+		projectLocalPath = await mkdtemp(join(tmpdir(), "warren-triggers-get-"));
+
+		const row = repos.projects.create({
+			gitUrl: "https://github.com/x/y.git",
+			localPath: projectLocalPath,
+			defaultBranch: "main",
+		});
+		projectId = row.id;
+	});
+
+	afterEach(async () => {
+		if (handle) {
+			await handle.stop();
+			handle = null;
+		}
+		db.close();
+	});
+
+	test("empty list + empty errors when .warren/ is absent", async () => {
+		const burrowClient = new BurrowClient({
+			config: { transport: { kind: "unix", path: "/tmp/x.sock" } },
+			fetch: stub(async () => new Response("{}", { status: 200 })),
+		});
+		const deps = depsFor(repos, burrowClient);
+		handle = startServer(deps, {
+			transport: { kind: "tcp", hostname: "127.0.0.1", port: 0 },
+			auth: NO_AUTH,
+			logger: silentLogger,
+		});
+
+		const res = await fetch(`${tcpUrl(handle)}/projects/${projectId}/triggers`);
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as { triggers: unknown[]; errors: unknown[] };
+		expect(body.triggers).toEqual([]);
+		expect(body.errors).toEqual([]);
+	});
+
+	test("joins parsed YAML with persisted last/next/lastRunId and freshly-computed nextFireAt", async () => {
+		const { mkdir, writeFile } = await import("node:fs/promises");
+		const { join } = await import("node:path");
+		await mkdir(join(projectLocalPath, ".warren"));
+		await writeFile(
+			join(projectLocalPath, ".warren", "triggers.yaml"),
+			"- id: nightly\n  kind: cron\n  cron: '0 2 * * *'\n  seed: warren-1\n  role: refactor-bot\n",
+		);
+
+		// Seed an agent + run so the scheduler row's lastRunId FK resolves.
+		repos.agents.upsert({
+			name: "refactor-bot",
+			renderedJson: {
+				name: "refactor-bot",
+				version: 1,
+				sections: { system: "..." },
+				resolvedFrom: [],
+				frontmatter: {},
+			},
+		});
+		const seedRun = repos.runs.create({
+			agentName: "refactor-bot",
+			projectId,
+			prompt: "p",
+			renderedAgentJson: { name: "refactor-bot", sections: { system: "..." } },
+			trigger: "cron",
+		});
+
+		// Pre-populate the scheduler row so the join surfaces lastFiredAt +
+		// lastRunId. Persisted nextFireAt is intentionally stale so the
+		// freshly-computed value beats it on the wire.
+		repos.triggers.upsert({
+			projectId,
+			triggerId: "nightly",
+			lastFiredAt: "2026-05-09T02:00:00.000Z",
+			nextFireAt: "2026-05-10T02:00:00.000Z",
+			lastRunId: seedRun.id,
+		});
+
+		const burrowClient = new BurrowClient({
+			config: { transport: { kind: "unix", path: "/tmp/x.sock" } },
+			fetch: stub(async () => new Response("{}", { status: 200 })),
+		});
+		const deps: ServerDeps = {
+			...depsFor(repos, burrowClient),
+			// Freeze "now" so the recomputed nextFireAt is deterministic.
+			now: () => new Date("2026-05-10T12:00:00.000Z"),
+		};
+		handle = startServer(deps, {
+			transport: { kind: "tcp", hostname: "127.0.0.1", port: 0 },
+			auth: NO_AUTH,
+			logger: silentLogger,
+		});
+
+		const res = await fetch(`${tcpUrl(handle)}/projects/${projectId}/triggers`);
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as {
+			triggers: {
+				id: string;
+				kind: string;
+				cron: string;
+				seed: string;
+				role: string;
+				lastFiredAt: string | null;
+				nextFireAt: string | null;
+				lastRunId: string | null;
+				parseError: string | null;
+			}[];
+			errors: unknown[];
+		};
+		expect(body.errors).toEqual([]);
+		expect(body.triggers.length).toBe(1);
+		const t = body.triggers[0];
+		expect(t?.id).toBe("nightly");
+		expect(t?.cron).toBe("0 2 * * *");
+		expect(t?.seed).toBe("warren-1");
+		expect(t?.role).toBe("refactor-bot");
+		expect(t?.lastFiredAt).toBe("2026-05-09T02:00:00.000Z");
+		expect(t?.lastRunId).toBe(seedRun.id);
+		// Next fire is 2026-05-11T02:00:00Z (next 02:00 UTC after frozen now).
+		expect(t?.nextFireAt).toBe("2026-05-11T02:00:00.000Z");
+		expect(t?.parseError).toBeNull();
+	});
+
+	test("surfaces YAML schema errors in the errors envelope", async () => {
+		const { mkdir, writeFile } = await import("node:fs/promises");
+		const { join } = await import("node:path");
+		await mkdir(join(projectLocalPath, ".warren"));
+		// Schema violation: missing required `seed` and `role`.
+		await writeFile(
+			join(projectLocalPath, ".warren", "triggers.yaml"),
+			"- id: nightly\n  kind: cron\n  cron: '0 2 * * *'\n",
+		);
+
+		const burrowClient = new BurrowClient({
+			config: { transport: { kind: "unix", path: "/tmp/x.sock" } },
+			fetch: stub(async () => new Response("{}", { status: 200 })),
+		});
+		const deps = depsFor(repos, burrowClient);
+		handle = startServer(deps, {
+			transport: { kind: "tcp", hostname: "127.0.0.1", port: 0 },
+			auth: NO_AUTH,
+			logger: silentLogger,
+		});
+
+		const res = await fetch(`${tcpUrl(handle)}/projects/${projectId}/triggers`);
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as {
+			triggers: unknown[];
+			errors: { file: string; code: string }[];
+		};
+		expect(body.triggers).toEqual([]);
+		expect(body.errors.length).toBe(1);
+		expect(body.errors[0]?.file).toBe(".warren/triggers.yaml");
+		expect(body.errors[0]?.code).toBe("warren_config_schema_error");
+	});
+
+	test("404 for an unknown project id", async () => {
+		const burrowClient = new BurrowClient({
+			config: { transport: { kind: "unix", path: "/tmp/x.sock" } },
+			fetch: stub(async () => new Response("{}", { status: 200 })),
+		});
+		const deps = depsFor(repos, burrowClient);
+		handle = startServer(deps, {
+			transport: { kind: "tcp", hostname: "127.0.0.1", port: 0 },
+			auth: NO_AUTH,
+			logger: silentLogger,
+		});
+
+		const res = await fetch(`${tcpUrl(handle)}/projects/prj_doesnotexist/triggers`);
+		expect(res.status).toBe(404);
+	});
+});
+
+describe("POST /projects/:id/triggers/:triggerId/run — manual Run Now (warren-99c3)", () => {
+	let db: WarrenDb;
+	let repos: Repos;
+	let handle: ServeHandle | null = null;
+	let projectLocalPath = "";
+	let projectId = "";
+
+	beforeEach(async () => {
+		db = await openDatabase({ path: ":memory:" });
+		repos = createRepos(db);
+
+		repos.agents.upsert({
+			name: "refactor-bot",
+			renderedJson: {
+				name: "refactor-bot",
+				version: 1,
+				sections: { system: "you are refactor-bot" },
+				resolvedFrom: [],
+				frontmatter: {},
+			},
+		});
+
+		const { mkdtemp } = await import("node:fs/promises");
+		const { tmpdir } = await import("node:os");
+		const { join } = await import("node:path");
+		projectLocalPath = await mkdtemp(join(tmpdir(), "warren-triggers-run-"));
+
+		const row = repos.projects.create({
+			gitUrl: "https://github.com/x/y.git",
+			localPath: projectLocalPath,
+			defaultBranch: "main",
+		});
+		projectId = row.id;
+	});
+
+	afterEach(async () => {
+		if (handle) {
+			await handle.stop();
+			handle = null;
+		}
+		db.close();
+	});
+
+	test("dispatches the named trigger, returns 201, records fire + bridge", async () => {
+		const { mkdir, writeFile, mkdtemp } = await import("node:fs/promises");
+		const { tmpdir } = await import("node:os");
+		const { join } = await import("node:path");
+		await mkdir(join(projectLocalPath, ".warren"));
+		await writeFile(
+			join(projectLocalPath, ".warren", "triggers.yaml"),
+			"- id: nightly\n  kind: cron\n  cron: '0 2 * * *'\n  seed: warren-1\n  role: refactor-bot\n  prompt: 'hand-rolled prompt'\n",
+		);
+
+		const tmpWs = await mkdtemp(join(tmpdir(), "warren-triggers-ws-"));
+		const calls: { method: string; path: string; body: unknown }[] = [];
+		const burrowClient = makeBurrowClient(
+			{ burrowId: "bur_xxxxxxxxxxxx", burrowRunId: "run_zzzzzzzzzzzz", workspacePath: tmpWs },
+			calls,
+		);
+
+		const bridgeStarted: { runId: string; burrowRunId: string }[] = [];
+		const bridges: BridgeRegistry = {
+			start: (runId, burrowRunId) => {
+				bridgeStarted.push({ runId, burrowRunId });
+			},
+			stopAll: async () => {},
+			size: () => bridgeStarted.length,
+		};
+		const deps: ServerDeps = {
+			...depsFor(repos, burrowClient, bridges),
+			now: () => new Date("2026-05-10T12:00:00.000Z"),
+		};
+		handle = startServer(deps, {
+			transport: { kind: "tcp", hostname: "127.0.0.1", port: 0 },
+			auth: NO_AUTH,
+			logger: silentLogger,
+		});
+
+		const res = await fetch(`${tcpUrl(handle)}/projects/${projectId}/triggers/nightly/run`, {
+			method: "POST",
+		});
+		expect(res.status).toBe(201);
+		const body = (await res.json()) as {
+			run: { id: string; trigger: string; agentName: string; prompt: string };
+			burrow: { id: string; workspacePath: string };
+		};
+		expect(body.run.id).toMatch(/^run_/);
+		expect(body.run.trigger).toBe("manual-trigger");
+		expect(body.run.agentName).toBe("refactor-bot");
+		expect(body.run.prompt).toBe("hand-rolled prompt");
+		expect(body.burrow.id).toBe("bur_xxxxxxxxxxxx");
+		expect(bridgeStarted.length).toBe(1);
+		expect(bridgeStarted[0]?.burrowRunId).toBe("run_zzzzzzzzzzzz");
+
+		// Triggers row stamped with manual fire + nextFireAt rolled forward.
+		const row = repos.triggers.get({ projectId, triggerId: "nightly" });
+		expect(row?.lastFiredAt).toBe("2026-05-10T12:00:00.000Z");
+		expect(row?.nextFireAt).toBe("2026-05-11T02:00:00.000Z");
+		expect(row?.lastRunId).toBe(body.run.id);
+	});
+
+	test("404 when the trigger id is not in .warren/triggers.yaml", async () => {
+		const { mkdir, writeFile } = await import("node:fs/promises");
+		const { join } = await import("node:path");
+		await mkdir(join(projectLocalPath, ".warren"));
+		await writeFile(
+			join(projectLocalPath, ".warren", "triggers.yaml"),
+			"- id: nightly\n  kind: cron\n  cron: '0 2 * * *'\n  seed: warren-1\n  role: refactor-bot\n",
+		);
+
+		const calls: { method: string; path: string; body: unknown }[] = [];
+		const burrowClient = makeBurrowClient(
+			{ burrowId: "bur_xxxxxxxxxxxx", burrowRunId: "run_zzzzzzzzzzzz", workspacePath: "/tmp/ws" },
+			calls,
+		);
+		const deps = depsFor(repos, burrowClient);
+		handle = startServer(deps, {
+			transport: { kind: "tcp", hostname: "127.0.0.1", port: 0 },
+			auth: NO_AUTH,
+			logger: silentLogger,
+		});
+
+		const res = await fetch(`${tcpUrl(handle)}/projects/${projectId}/triggers/missing/run`, {
+			method: "POST",
+		});
+		expect(res.status).toBe(404);
+		const body = (await res.json()) as { error: { code: string } };
+		expect(body.error.code).toBe("not_found");
+	});
+
+	test("404 when the project id is unknown", async () => {
+		const calls: { method: string; path: string; body: unknown }[] = [];
+		const burrowClient = makeBurrowClient(
+			{ burrowId: "bur_xxxxxxxxxxxx", burrowRunId: "run_zzzzzzzzzzzz", workspacePath: "/tmp/ws" },
+			calls,
+		);
+		const deps = depsFor(repos, burrowClient);
+		handle = startServer(deps, {
+			transport: { kind: "tcp", hostname: "127.0.0.1", port: 0 },
+			auth: NO_AUTH,
+			logger: silentLogger,
+		});
+
+		const res = await fetch(`${tcpUrl(handle)}/projects/prj_doesnotexist/triggers/nightly/run`, {
+			method: "POST",
+		});
+		expect(res.status).toBe(404);
+	});
+});
