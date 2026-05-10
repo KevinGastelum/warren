@@ -109,7 +109,9 @@ collision.
 ---
 
 ## R-02 — `.warren/` directory convention
-Status: [proposed]
+Status: [shipped] — landed via plan `pl-5d74` (warren-571f), 2026-05-10.
+Convention, schema, loader, HTTP/UI surface, and `warren doctor` check all
+ship in V1; R-06 (cron scheduler) consumes the parsed `triggers.yaml` next.
 Depends on: —
 Unlocks: R-06 (cron schedules need a git-tracked home); future webhook trigger
 mappings; per-project default-role overrides
@@ -120,42 +122,78 @@ prompt store) or seed `extensions` (per-issue metadata) is the wrong shape.
 But it's still git-tracked config that benefits from PR review, version
 history, and travels with the project.
 
-**Sketch.** New directory in each project repo: `.warren/`. Files to start:
+**Shipped shape.** Each project repo can grow a `.warren/` directory with two
+files. Both are optional — missing files are not errors, and the loader
+returns a `null` entry per missing file so existing projects keep working
+unchanged. Format choice diverged from the original sketch:
 
     .warren/
-      triggers.yaml      # cron + future webhook triggers
-      defaults.yaml      # per-project default role, default branch, etc.
+      triggers.yaml      # cron triggers (and future webhook entries)
+      defaults.json      # per-project defaults — JSON, not YAML
 
-`triggers.yaml` schema:
+The YAML→JSON switch on `defaults` (sketch was `defaults.yaml`) was a
+deliberate format-symmetry decision: `defaults` is small, structurally
+flat, and matches the rest of os-eco's JSON wire surface; YAML's only
+advantage is multi-line strings, which `defaultPrompt` doesn't need today.
+Recorded as `mx-2cefdd` (mulch). Triggers stay YAML — cron expressions read
+better there and arrays-of-objects are noisier in TOML/JSON. YAML parser
+is `js-yaml ^4.1.1` to match mulch and overstory (`mx-8b6896`).
+
+`triggers.yaml` schema (zod-validated, `kind` discriminator leaves room for
+future webhook entries without a breaking schema rev):
 
     - id: nightly-refactor
+      kind: cron
       cron: "0 3 * * *"
-      timezone: UTC
+      timezone: UTC               # optional
       seed: seeds-abc1
       role: refactor-bot
+      prompt: |                   # optional override of defaultPrompt
+        Run nightly cleanup pass.
 
-`defaults.yaml` schema:
+`defaults.json` schema:
 
-    defaultRole: claude-code     # or sapling, or any registered role
-    defaultBranch: main
-    defaultPrompt: |             # optional template
-      Read the issue, plan, execute, file follow-ups.
+    {
+      "defaultRole": "claude-code",
+      "defaultBranch": "main",
+      "defaultPrompt": "Read the issue, plan, execute, file follow-ups."
+    }
 
-Warren reads these on project load and on watcher refresh. Runtime state
-(last-fired-at, next-fire-at) stays in warren's SQLite.
+Surface that landed alongside the schema:
+
+- `src/warren-config/` module mirrors `src/projects/` + `src/registry/`
+  layout (errors / config / schema / load / index, plus a per-project
+  cache). Loader is `loadWarrenConfig({ projectPath })` and uses a
+  missing-vs-malformed envelope (`mx-66d478`) — never throws on per-file
+  errors.
+- `GET /projects/:id/warren-config` returns the `LoadedWarrenConfig`
+  envelope (`{ triggers, defaults, errors }`); `WarrenConfigUnavailableError`
+  joins the existing burrow/canopy/project unavailable family
+  (`mx-bd1f9f`).
+- Project detail page renders a read-only Warren Config panel showing
+  triggers, defaults, and per-file validation errors (`mx-a5e30e`).
+- `warren doctor` and `/readyz` emit a `warren_config` check that walks
+  every loaded project and flags malformed entries (`mx-f37c30`,
+  `mx-1a70ef` — eight checks now).
+- Acceptance scenario 14 (`scripts/acceptance/scenarios/14-warren-config.ts`)
+  covers absent / valid / malformed across `/readyz` (`mx-e959c0`).
+
+Runtime state (last-fired-at, next-fire-at) stays in warren's SQLite.
 
 Inspired by `.github/workflows/`: declarative config in git, runtime in the
 control plane.
 
-**Open questions.**
-- YAML vs. JSON vs. TOML. YAML matches `.github/workflows/`; JSON matches the
-  rest of os-eco; TOML matches `burrow.toml`. Lean YAML for triggers
-  (cron expressions read better there) and JSON for defaults (smaller).
-- Whether to validate via JSON Schema shipped with warren and surface errors
-  in the UI. Yes — same shape as canopy's prompt validation.
-- Bootstrap UX: does `warren add-project <url>` create an empty `.warren/` if
-  missing, or only on first config write? Lazy is fine; no point in empty
-  files.
+**Scope deliberately deferred** to keep this seed bounded:
+
+- `defaults.defaultRole` is parsed but not yet wired into spawn. R-04's
+  NewRun form will fall back to `WARREN_DEFAULT_AGENT` until R-04 picks up
+  per-project defaults.
+- `defaults.defaultPrompt` is parsed but no template substitution path
+  consumes it. R-04 (issue → run dispatch) and R-06 (scheduled runs) are
+  the natural consumers.
+- `triggers` are parsed and exposed but not dispatched. R-06 reads them.
+- Bootstrap UX: `warren add-project` does not auto-create an empty
+  `.warren/`. Lazy is fine; no point in empty files.
 
 ---
 
@@ -347,11 +385,13 @@ user.
 ---
 
 ## R-06 — Cron scheduler
-Status: [proposed]
-Depends on: R-02 (`.warren/triggers.yaml` is the trigger config home); R-01
-(seeds `extensions.scheduledFor` for one-off scheduled runs — **seeds side
-shipped v0.4.3, including `sd ready --respect-schedule` to keep deferred seeds
-out of the ready queue**). Only blocker now is warren-internal R-02.
+Status: [proposed] — fully unblocked as of 2026-05-10.
+Depends on: R-02 (`.warren/triggers.yaml` is the trigger config home —
+**shipped 2026-05-10 via pl-5d74**, parsed schema available via
+`loadWarrenConfig` and `GET /projects/:id/warren-config`); R-01 (seeds
+`extensions.scheduledFor` for one-off scheduled runs — **seeds side shipped
+v0.4.3, including `sd ready --respect-schedule` to keep deferred seeds out of
+the ready queue**). Both prerequisites satisfied.
 Unlocks: scheduled agent runs without leaving warren; nightly refactor /
 weekly docs-update / hourly triage-sweep workflows
 
@@ -849,6 +889,16 @@ so subsequent revisions know what's already off the punch list.
 - **Built-in agents shipped inline** (`src/registry/builtins/`). `claude-code`
   and `sapling` available without any `CANOPY_REPO_URL` configuration. Fresh
   warren installs work out of the box.
+- **`.warren/` directory convention** (R-02, plan `pl-5d74`, 2026-05-10).
+  Per-project, git-tracked home for warren-specific config. Two files:
+  `triggers.yaml` (cron entries, `kind:` discriminator leaves room for
+  future webhook triggers) and `defaults.json` (per-project default role /
+  branch / prompt). New `src/warren-config/` module owns the loader + zod
+  schemas; `GET /projects/:id/warren-config` exposes the envelope; project
+  detail UI renders triggers + defaults + per-file errors; `warren doctor`
+  + `/readyz` add a `warren_config` check; acceptance scenario 14 covers
+  absent / valid / malformed states. Triggers are parsed but not
+  dispatched — R-06 picks them up next.
 
 ## Cross-repo readiness (2026-05-10)
 
@@ -885,8 +935,8 @@ cross-repo readiness: R-01's seeds-side and R-11's canopy + mulch sides have
 all shipped, so several items that were "wait on the upstream" are now
 "warren-internal work."
 
-1. **R-02** (`.warren/` directory) — small, internal, establishes the config
-   pattern R-06 builds on. No upstream dependency.
+1. **R-02** (`.warren/` directory) — ✅ shipped 2026-05-10 (plan `pl-5d74`).
+   Establishes the config pattern R-06 builds on. R-06 now unblocked.
 2. **R-03** (per-project canopy tier) — small, scoped to the registry module.
    Independent of R-02; can land in parallel.
 3. **R-01 consumer-side** — seeds half is shipped; warren needs to wire

@@ -7,6 +7,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`feat(warren-config)`** — `.warren/` per-project config directory
+  ships end-to-end (R-02, plan `pl-5d74`, warren-571f). Two optional
+  files per project: `triggers.yaml` (zod-validated cron entries with a
+  `kind:` discriminator that leaves room for future webhook triggers
+  without a breaking schema rev) and `defaults.json` (per-project
+  `defaultRole` / `defaultBranch` / `defaultPrompt`). Format choice
+  diverges from the original ROADMAP sketch: `defaults` is JSON, not
+  YAML, for symmetry with the rest of os-eco's wire surface (`mx-2cefdd`).
+  YAML parser is `js-yaml ^4.1.1` to match mulch + overstory
+  (`mx-8b6896`). New `src/warren-config/` module mirrors the
+  `src/projects/` + `src/registry/` layout (errors / config / schema /
+  load / cache / index). Loader uses a missing-vs-malformed envelope so
+  per-file errors never throw (`mx-66d478`). Per-project cache is
+  invalidated inside `refreshProject` and `deleteProject` to dodge the
+  stale-config race (pl-5d74 risk #4, `mx-61c0e6`). Triggers are parsed
+  but not dispatched — R-06 (cron scheduler) is the consumer and is now
+  fully unblocked.
+- **`feat(server)`** — `GET /projects/:id/warren-config` returns the
+  `LoadedWarrenConfig` envelope verbatim (`{ triggers, defaults, errors }`);
+  404 on unknown project. `WarrenConfigUnavailableError` joins the
+  existing `BurrowUnreachableError` / `CanopyUnavailableError` /
+  `ProjectUnavailableError` family for uniform error handling
+  (`mx-adf588`, `mx-bd1f9f`).
+- **`feat(ui)`** — Project detail page (`src/ui/src/pages/ProjectDetail.tsx`,
+  `mx-dc191e`) renders a read-only Warren Config panel with three blocks
+  per envelope: triggers list, defaults key/value, per-file validation
+  errors (`mx-a5e30e`). Editing remains a git operation; warren only
+  surfaces the parsed view.
+- **`feat(diagnostics)`** — `warren doctor` and `/readyz` add a
+  `warren_config` check that walks every loaded project and aggregates
+  per-file errors into a single diagnostic row (`mx-f37c30`). Doctor's
+  check ordering is now eight entries (`mx-1a70ef`); the eighth slot is
+  `warren_config`.
+- **`test(acceptance)`** — scenario 14
+  (`scripts/acceptance/scenarios/14-warren-config-lifecycle.ts`) covers
+  `.warren/` lifecycle: absent / valid / malformed states asserted via
+  `/readyz` rather than spawning `warren doctor` as a child (avoids the
+  wrong-DB problem documented in `mx-e959c0`). Scenarios 11 and 14 also
+  pin `WARREN_DB_PATH` to a scratch path so the doctor exit-code check
+  doesn't observe the shared dev DB (`mx-544f8f`, `mx-895738`).
+
+### Docs
+
+- **`docs(roadmap)`** — `ROADMAP.md` flips R-02 from `[proposed]` to
+  `[shipped]` and inlines the as-built schema, surface, and the scope
+  deliberately deferred to R-04 / R-06. R-06's "Depends on" updates to
+  show R-02 as satisfied. Suggested-sequencing R-02 entry marked
+  shipped. New entry under "Recently shipped".
+- **`docs(spec)`** — `SPEC.md` adds §11.H pinning the `.warren/`
+  convention into V1's frozen record (layout, format choice, schema,
+  loader contract, HTTP/UI/diagnostics surface, deferred scope). §7
+  project structure adds `src/warren-config/`; §8.1 HTTP routes adds
+  `GET /projects/:id/warren-config`.
+
 ## [0.1.4] — 2026-05-10
 
 Acceptance harness fill-in plus a deploy-time guardrail. Six new

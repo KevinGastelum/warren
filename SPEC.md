@@ -267,6 +267,11 @@ warren/
 │   ├── projects/
 │   │   ├── clone.ts            # git clone <url> → /data/projects/...
 │   │   └── repo.ts             # discovery, .seeds/.mulch/ presence checks
+│   ├── warren-config/          # per-project .warren/ loader (§11.H, R-02)
+│   │   ├── schema.ts           # zod: triggers.yaml + defaults.json
+│   │   ├── load.ts             # missing-vs-malformed envelope, never throws
+│   │   ├── cache.ts            # per-project cache invalidated on refreshProject
+│   │   └── errors.ts           # WarrenConfigUnavailableError + per-file codes
 │   ├── runs/
 │   │   ├── spawn.ts            # composition flow §4.3
 │   │   ├── reap.ts             # capture mulch deltas (§11.A), close seeds, push branch
@@ -313,6 +318,7 @@ GET    /agents/:name            — full rendered agent (cn render output)
 GET    /projects                — list cloned project repos
 POST   /projects                — { gitUrl, defaultBranch? } → clone
 DELETE /projects/:id            — remove project
+GET    /projects/:id/warren-config — parsed .warren/ envelope (§11.H, R-02)
 
 POST   /runs                    — { agent, project, prompt } → spawn
 GET    /runs                    — list with filters (status, agent, project)
@@ -543,6 +549,79 @@ After all five §11.E gaps were closed, a second end-to-end run against warren i
 ### 11.G Third dogfood (2026-05-09)
 
 Released as `0.1.2` after closing all six §11.F gaps; bumped `@os-eco/burrow-cli` to `0.2.7` in **both** `Dockerfile` and `package.json` + `bun.lock` to pull in the gitdir-bind fix (`burrow-7a80`: burrow's bwrap profile now binds the host worktree gitdir into the sandbox, so an agent at UID 1000 can resolve `<workspace>/.git → /<host-path>/.git/worktrees/<id>` and run `git commit` inside its workspace). Two runs against warren-on-warren produced the cleanest signal yet on the §4.3 composition flow. **Run 1 (`run_a98cfx1fantf`, prompt `"Work on sd warren-9f65. Use ml"`)** completed `succeeded` in 6m28s / 49 turns with `branchPushed: true` — and zero of the agent's work on the remote (`gh compare main...burrow/bur_r9mjn6da9xc9 → ahead_by: 0, total_commits: 0`). The branch ref pointed at main's SHA; warren reap pushed an unchanged HEAD because the agent never ran `git commit`. The thin canopy `claude-code` prompt (`canopy-daf3`: `"You are a helpful coding assistant. Be concise."`) contains no commit contract; combined with `src/runs/reap.ts:257-265` (push-without-commit) and the `branchPushed` boolean (which flips `true` on any successful push including a no-op) the result is a silent work-loss shape that even an attentive operator misreads as success — filed as `warren-f3bb` (P1: observability fix B + canopy-prompt fix C + SPEC §4.3.6 doc fix D). A secondary entanglement filed as `warren-fead` (the agent emitted `stop_reason=end_turn` while waiting on a foreground `bun install` Monitor — *"I'll wait for the monitor"* with no follow-up tool call ended the run before commit could happen). **Run 2 (`run_agpet4ev6e4a`, prompt `"...Commit and push when you're done"`)** produced the first warren-on-warren success that actually shipped: branch `burrow/bur_0qgh4pwpvgv0` at SHA `15339e61` with `ahead_by: 1`, real diff across 5 files (acceptance scenario 04 implementation + lib changes + mulch + seeds). The fix-C scope is validated — instructing the agent to commit is sufficient for the smoke-test agent. The *"and push"* portion was inert and counterproductive: agent-side `git push` failed four times with `fatal: could not read Username for 'https://github.com'` because warren's supervisor installs the `insteadOf` rewrite rule into `/root/.gitconfig` (`src/supervisor/git-credentials.ts:65-71`), but burrow's bwrap profile ro-binds `/usr`, `/etc`, `/lib`, `/lib64`, `/bin`, `/sbin`, `/opt` — *not* `/root`. Same architectural pattern as `warren-1eaa` (Bun store at `/root/.bun` invisible inside sandbox); the git config has the same problem and was not relocated. Filed as `warren-1a09` (P2): for V1, fix A (canopy prompt instructs commit only — *"warren handles the push"*) and fix D (SPEC documents the contract: agent commits, reap pushes, sandbox has no github auth path) are sufficient. Reap pushed the agent's commit successfully because reap runs host-side with `/root/.gitconfig` visible — the system did the right thing while the agent burned ~5 turns on doomed retries.
+
+### 11.H `.warren/` directory convention (2026-05-10)
+
+R-02 from `ROADMAP.md` shipped via plan `pl-5d74` (warren-571f) before the
+V2 phase opens. Worth pinning in V1's frozen record because the warren ↔
+project-repo seam now has a third tier alongside `.canopy/` (prompts) and
+`.mulch/` (expertise).
+
+**Layout.** Each project repo may contain a `.warren/` directory with two
+optional files:
+
+```
+.warren/
+  triggers.yaml      # array of trigger entries (cron today; webhooks future)
+  defaults.json      # per-project default role / branch / prompt
+```
+
+Both files are optional; the loader's envelope returns `null` for missing
+files instead of erroring (`mx-66d478`), so existing project repos keep
+working unchanged.
+
+**Format choice.** `triggers.yaml` is YAML (cron expressions read better;
+arrays-of-objects are noisier in TOML/JSON). `defaults.json` is JSON despite
+the original ROADMAP sketch saying YAML — the file is small, structurally
+flat, and matches the rest of os-eco's JSON wire surface. Format choice
+recorded as `mx-2cefdd`; YAML parser is `js-yaml ^4.1.1` to match mulch +
+overstory (`mx-8b6896`).
+
+**Schema.** `triggers.yaml` is `Array<Trigger>` with a `kind:` discriminator
+(only `'cron'` is implemented today; `kind:` exists so future webhook
+entries can land without a breaking schema rev — `mx-3636de`). Cron-token
+validation is intentionally loose (5 or 6 whitespace-separated fields,
+non-empty); R-06 owns full grammar checking when it wires in croner
+(`mx-40fe51`). `defaults.json` is `{ defaultRole?, defaultBranch?,
+defaultPrompt? }` — all optional, all strict.
+
+**Loader contract** (`src/warren-config/load.ts`):
+
+- Returns `LoadedWarrenConfig = { triggers: TriggersConfig | null,
+  defaults: DefaultsConfig | null, errors: WarrenConfigFileError[] }`.
+- Missing file → entry is `null`, no error.
+- Present-but-malformed file → entry is `null`, error appended with code
+  (`yaml_parse | json_parse | schema_invalid`) and message.
+- Per-project cache (`src/warren-config/cache.ts`) is invalidated inside
+  `refreshProject` and `deleteProject` (`mx-61c0e6`) so the next request
+  reparses; this avoids the stale-config race called out in pl-5d74 risk #4.
+
+**HTTP surface.** `GET /projects/:id/warren-config` returns the
+`LoadedWarrenConfig` envelope verbatim (`mx-adf588`); 404 if the project
+doesn't exist; `WarrenConfigUnavailableError` joins the existing
+`BurrowUnreachableError` / `CanopyUnavailableError` /
+`ProjectUnavailableError` family (`mx-bd1f9f`).
+
+**UI surface.** Project detail (`src/ui/src/pages/ProjectDetail.tsx`,
+`mx-dc191e`) renders three blocks per envelope: triggers list, defaults
+key/value, per-file errors. Read-only in V1 — editing the YAML/JSON is a
+git operation; warren only surfaces the parsed view (`mx-a5e30e`).
+
+**Diagnostics.** `warren doctor` and `/readyz` emit a `warren_config` check
+that walks every loaded project and aggregates `errors[]` into a single
+diagnostic row (`mx-f37c30`). Doctor's check ordering is now eight entries
+(`mx-1a70ef`); the eighth slot is `warren_config`.
+
+**Acceptance.** Scenario 14 (`scripts/acceptance/scenarios/14-warren-config.ts`)
+exercises absent / valid / malformed against `/readyz` rather than spawning
+`warren doctor` as a child, because doctor would be running against the
+wrong DB (`mx-e959c0` documents the rationale).
+
+**Scope deliberately deferred to R-04 / R-06.** `defaults.defaultRole` is
+parsed but spawn still falls back to `WARREN_DEFAULT_AGENT`;
+`defaults.defaultPrompt` has no template-substitution consumer yet;
+`triggers` are parsed but never dispatched. R-06 (cron scheduler) is the
+direct downstream consumer and is now fully unblocked.
 
 ---
 
