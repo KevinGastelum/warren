@@ -1,22 +1,29 @@
 # Warren
 
-> A network of interconnected burrows. The control plane and UI for cloud-based custom agents that operate in isolation, self-manage, self-repair, and self-improve.
+Control plane and UI for cloud-based coding agents.
 
-**Status:** V1, 0.1.4. The manual-run path is end-to-end validated as of 2026-05-09 (see [SPEC.md §11.E](SPEC.md#11e-first-run-validation-2026-05-09)). Scheduler (cron + webhooks) and library API exports are deferred to V2.
+[![CI](https://github.com/jayminwest/warren/actions/workflows/ci.yml/badge.svg)](https://github.com/jayminwest/warren/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-Warren composes the os-eco data-plane tools — [canopy](https://github.com/jayminwest/canopy) (prompts), [mulch](https://github.com/jayminwest/mulch) (expertise), [seeds](https://github.com/jayminwest/seeds) (issues), [sapling](https://github.com/jayminwest/sapling) (harness) — and the [burrow](https://github.com/jayminwest/burrow) sandbox runtime into a single deployable system. **One container, one volume, one HTTP API, one UI.**
+> A network of interconnected burrows. Agents that operate in isolation, self-manage, self-repair, and self-improve.
 
-## What works today
+Warren composes the [os-eco](https://github.com/jayminwest/os-eco) data-plane tools — [canopy](https://github.com/jayminwest/canopy) (prompts), [mulch](https://github.com/jayminwest/mulch) (expertise), [seeds](https://github.com/jayminwest/seeds) (issues), [sapling](https://github.com/jayminwest/sapling) (harness) — on top of the [burrow](https://github.com/jayminwest/burrow) sandbox runtime into a single deployable system. **One container, one volume, one HTTP API, one UI.**
 
-A `warren run claude-code <project> -p "..."` against a real project repo:
+Run a Claude Code or Sapling agent against any GitHub project from a browser, watch its events stream live, steer it mid-run, and reap its expertise back into the project's `.mulch/` and its open work back into `.seeds/` — all without exposing the agent to the host.
 
-1. Resolves the agent — built-in by default (`claude-code`, `sapling` ship inline; see `src/registry/builtins/`), or from a connected canopy library if `CANOPY_REPO_URL` is set (`cn render`).
-2. Provisions a `bwrap`-isolated burrow under `/data/burrow/` with the agent's `burrow_config`.
-3. Seeds the burrow's `.canopy/`, `.mulch/`, and `.seeds/` from the rendered agent.
-4. Dispatches the run via burrow's HTTP API and streams NDJSON events back into warren's event log.
-5. Reaps per-run mulch deltas into the project's persistent `.mulch/` (last-write-wins by `ts`), closes seeds the agent marked done, and pushes the workspace branch.
+## Status
 
-The same flow drives the web UI, the `warren` admin CLI, and the HTTP API — all three are thin clients of the same composition pipeline (SPEC §4.3).
+V1 (`0.1.4`). The manual-run path is end-to-end validated against a deployed Fly.io instance ([SPEC §11.E](SPEC.md#11e-first-run-validation-2026-05-09)) and exercised by 13 scenario-based acceptance tests in [`scripts/acceptance/`](scripts/acceptance/). Scheduler (cron + GitHub webhooks) and library API exports are deferred to V2.
+
+## What you get
+
+- **One image, one volume.** The supervisor (`src/supervisor/main.ts`) is the container ENTRYPOINT — it spawns `burrow serve` first, waits for the unix socket, then spawns warren. SIGTERM/SIGINT forward to both children; burrow restarts under a 5-in-60s budget on unexpected exit.
+- **Native sandboxing per run.** Every run gets a fresh `bwrap`-isolated burrow under `/data/burrow/` with the agent's declared `burrow_config`. The host is unreachable; warren talks to burrow over a unix socket with a shared bearer token.
+- **Built-in agents, optional library.** `claude-code` and `sapling` ship inline (`src/registry/builtins/`). Set `CANOPY_REPO_URL` to layer a custom canopy library on top — library agents override built-ins by name.
+- **Live event stream.** NDJSON events from burrow are persisted to warren's SQLite log and tailed over `GET /runs/:id/events?follow=1`. The UI, CLI (`warren run`), and HTTP clients all consume the same stream.
+- **Round-tripped expertise + issues.** Per-run mulch deltas merge into the project's persistent `.mulch/` (last-write-wins by `ts`); seeds the agent marked done are closed; the workspace branch is pushed.
+- **Steerable mid-run.** `POST /runs/:id/steer` proxies to burrow's inbox; the next agent turn picks it up. `POST /runs/:id/cancel` aborts cleanly.
+- **Three thin clients of one pipeline.** Web UI, `warren` admin CLI, and HTTP API all flow through the same composition path ([SPEC §4.3](SPEC.md#43-the-composition-flow)).
 
 ## Architecture
 
@@ -36,9 +43,9 @@ The same flow drives the web UI, the `warren` admin CLI, and the HTTP API — al
                           [browser]
 ```
 
-The supervisor (`src/supervisor/main.ts`) is the container ENTRYPOINT. It spawns `burrow serve` first, waits for the unix socket to appear, then spawns warren. SIGTERM/SIGINT are forwarded to both children; burrow restarts with a 5-in-60s budget on unexpected exit. See [SPEC.md §10.3](SPEC.md#103-container-layout).
+Warren and burrow are tightly coupled by design — they are co-tenanted inside the container, share a unix socket, and share a bearer token (`BURROW_API_TOKEN` == `WARREN_BURROW_TOKEN`). See [SPEC §10.3](SPEC.md#103-container-layout) for the full layout.
 
-## Quick start (home server)
+## Quickstart (home server)
 
 ```bash
 git clone https://github.com/jayminwest/warren && cd warren
@@ -47,7 +54,7 @@ docker compose up -d
 open http://localhost:8080
 ```
 
-Required `.env` values (see `.env.example` for the full list):
+Required environment variables (see [`.env.example`](.env.example) for the full list):
 
 | Variable | Purpose |
 |---|---|
@@ -86,15 +93,17 @@ To layer a custom canopy library on top of the built-ins, also set
 
 ## CLI
 
-The `warren` (or `wr`) admin CLI is for ops. The web UI is daily.
+The `warren` (or `wr`) admin CLI is for ops; the web UI is daily.
 
-```
-warren register-agent <name>            refresh canopy + register one agent
-warren add-project <git-url>            clone a project under /data/projects
-warren run <agent> <project> -p "..."   one-shot, no UI
-warren doctor                           burrow reachable? canopy clean? bwrap working?
-warren serve                            start the HTTP server (default in entrypoint)
-```
+| Command | Description |
+|---|---|
+| `warren register-agent <name>` | Refresh canopy + register one agent |
+| `warren add-project <git-url>` | Clone a project under `/data/projects` |
+| `warren run <agent> <project> -p "..."` | One-shot run, no UI |
+| `warren doctor` | Burrow reachable? Canopy clean? Bwrap working? |
+| `warren serve` | Start the HTTP server (default in entrypoint) |
+
+A `warren run claude-code <project> -p "..."` does the full composition end-to-end: resolves the agent (built-in or canopy), provisions the burrow, seeds its `.canopy/` / `.mulch/` / `.seeds/`, dispatches the run, streams events back, then reaps mulch deltas, closes seeds, and pushes the branch.
 
 ## HTTP API
 
@@ -119,26 +128,28 @@ GET    /healthz                      liveness (no auth)
 GET    /readyz                       canopy + burrow + first-render check
 ```
 
-`Authorization: Bearer ${WARREN_API_TOKEN}` on every non-`/healthz` route. Warren does not terminate TLS — front it with Caddy on a home server or rely on Fly's edge.
+`Authorization: Bearer ${WARREN_API_TOKEN}` is required on every non-`/healthz` route. Warren does not terminate TLS — front it with Caddy on a home server, or rely on Fly's edge.
 
 ## Development
+
+Requires [Bun](https://bun.sh) v1.1+.
 
 ```bash
 bun install
 bun test                                          # all unit tests
-bun run lint                                      # biome check
+bun run lint                                      # biome check --error-on-warnings
 bun run typecheck                                 # tsc --noEmit
 bun test && bun run lint && bun run typecheck     # all quality gates
 ```
 
-UI dev (separate from the server build):
+UI development (separate from the server build):
 
 ```bash
 bun run ui:install
 bun run ui:dev
 ```
 
-The acceptance harness (`scripts/acceptance/`) drives scenario-based end-to-end runs against a live container. See `scripts/acceptance/run.ts` for the entry.
+The acceptance harness in [`scripts/acceptance/`](scripts/acceptance/) drives 13 scenario-based end-to-end runs against a live container — covering boot health, agent refresh, project lifecycle, run spawn/stream/cancel/steer, restart recovery, mulch + seeds round-tripping, doctor exit codes, supervisor restart-budget, and container-mode parity. See [ACCEPTANCE.md](ACCEPTANCE.md) for the runbook.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for branch naming, testing conventions, and PR expectations.
 
@@ -161,14 +172,26 @@ src/
 
 ## V1 limitations
 
-Documented in [SPEC.md §11.D](SPEC.md#11d-v1-security-posture-known-limitations) and accepted for this release:
+Documented in [SPEC §11.D](SPEC.md#11d-v1-security-posture-known-limitations) and accepted for this release:
 
 - **Single bearer token.** No rotation, no expiry, no scopes. Loss of `WARREN_API_TOKEN` is full access; rotate by editing `.env` (or `fly secrets set`) and bouncing the container.
 - **TLS is upstream's job.** Direct HTTP on a non-loopback bind is a misconfiguration; `warren doctor` warns.
 - **Trust-the-socket** between warren and burrow inside the container — they are co-tenanted by design.
 - **No CSRF, single-user.** UI calls warren's API with the bearer; CORS is strict.
 
-V2 candidates: scheduler (cron + GitHub webhooks), token-pair (read/write), per-token scopes, audit log, library API exports.
+V2 candidates: scheduler (cron + GitHub webhooks), token-pair (read/write), per-token scopes, audit log, library API exports. See [ROADMAP.md](ROADMAP.md).
+
+## Security
+
+Found a vulnerability? Please follow the disclosure process in [SECURITY.md](SECURITY.md).
+
+## Part of os-eco
+
+Warren is part of the [os-eco](https://github.com/jayminwest/os-eco) AI agent tooling ecosystem.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/jayminwest/os-eco/main/branding/logo.png" alt="os-eco" width="444" />
+</p>
 
 ## License
 
