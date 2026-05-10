@@ -7,6 +7,7 @@ import type {
 	AgentRow,
 	ApiErrorEnvelope,
 	CancelRunResponse,
+	CreateRunInput,
 	ProjectRow,
 	ReadyzResponse,
 	RefreshAgentsResponse,
@@ -149,7 +150,7 @@ export const runsApi = {
 	},
 	get: (id: string, signal?: AbortSignal) =>
 		request<RunRow>(`/runs/${encodeURIComponent(id)}`, { ...(signal ? { signal } : {}) }),
-	create: (input: { agent: string; project: string; prompt: string }) =>
+	create: (input: CreateRunInput) =>
 		request<SpawnRunResponse>("/runs", { method: "POST", body: input }),
 	steer: (id: string, input: { body: string }) =>
 		request<SteerRunResponse>(`/runs/${encodeURIComponent(id)}/steer`, {

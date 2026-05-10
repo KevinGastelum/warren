@@ -69,6 +69,18 @@ export interface BurrowSummary {
 	workspacePath: string;
 }
 
+/**
+ * Wire-side input for `POST /runs`. `ref` is an optional branch / tag /
+ * SHA the project clone should be checked out at before the run; omit
+ * (or pass empty) to use `project.defaultBranch` (warren-1bb6, warren-7589).
+ */
+export interface CreateRunInput {
+	agent: string;
+	project: string;
+	prompt: string;
+	ref?: string;
+}
+
 export interface SpawnRunResponse {
 	run: RunRow;
 	burrow: BurrowSummary;

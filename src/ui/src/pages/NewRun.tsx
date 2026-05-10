@@ -2,8 +2,10 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { agentsApi, projectsApi, runsApi } from "@/api/client.ts";
+import type { CreateRunInput } from "@/api/types.ts";
 import { Button } from "@/components/ui/button.tsx";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card.tsx";
+import { Input } from "@/components/ui/input.tsx";
 import { Label } from "@/components/ui/label.tsx";
 import { Textarea } from "@/components/ui/textarea.tsx";
 
@@ -22,10 +24,10 @@ export function NewRunPage() {
 	const [agent, setAgent] = useState("");
 	const [project, setProject] = useState("");
 	const [prompt, setPrompt] = useState("");
+	const [ref, setRef] = useState("");
 
 	const spawn = useMutation({
-		mutationFn: (input: { agent: string; project: string; prompt: string }) =>
-			runsApi.create(input),
+		mutationFn: (input: CreateRunInput) => runsApi.create(input),
 		onSuccess: (data) => {
 			qc.invalidateQueries({ queryKey: ["runs"] });
 			navigate(`/runs/${encodeURIComponent(data.run.id)}`);
@@ -35,11 +37,18 @@ export function NewRunPage() {
 	const handleSubmit = (e: React.FormEvent): void => {
 		e.preventDefault();
 		if (agent.length === 0 || project.length === 0 || prompt.trim().length === 0) return;
-		spawn.mutate({ agent, project, prompt });
+		const trimmedRef = ref.trim();
+		spawn.mutate({
+			agent,
+			project,
+			prompt,
+			...(trimmedRef.length > 0 ? { ref: trimmedRef } : {}),
+		});
 	};
 
 	const noAgents = !agents.isLoading && (agents.data?.agents.length ?? 0) === 0;
 	const noProjects = !projects.isLoading && (projects.data?.projects.length ?? 0) === 0;
+	const selectedProject = projects.data?.projects.find((p) => p.id === project);
 
 	return (
 		<div className="mx-auto max-w-3xl space-y-6">
@@ -111,6 +120,22 @@ export function NewRunPage() {
 									</option>
 								))}
 							</select>
+						</div>
+
+						<div className="space-y-1.5">
+							<Label htmlFor="ref">Branch / tag / SHA (optional)</Label>
+							<Input
+								id="ref"
+								value={ref}
+								onChange={(e) => setRef(e.target.value)}
+								placeholder={selectedProject?.defaultBranch ?? "default branch"}
+								autoComplete="off"
+								spellCheck={false}
+							/>
+							<p className="text-xs text-(--color-muted-foreground)">
+								Leave blank to use the project's default branch. Free text — no
+								remote-branch lookup yet.
+							</p>
 						</div>
 
 						<div className="space-y-1.5">
