@@ -14,8 +14,10 @@ import type {
 	RefreshProjectResponse,
 	RunEvent,
 	RunRow,
+	RunTriggerResponse,
 	SpawnRunResponse,
 	SteerRunResponse,
+	TriggersResponse,
 	WarrenConfigResponse,
 } from "./types.ts";
 
@@ -132,6 +134,15 @@ export const projectsApi = {
 		request<WarrenConfigResponse>(`/projects/${encodeURIComponent(id)}/warren-config`, {
 			...(signal ? { signal } : {}),
 		}),
+	triggers: (id: string, signal?: AbortSignal) =>
+		request<TriggersResponse>(`/projects/${encodeURIComponent(id)}/triggers`, {
+			...(signal ? { signal } : {}),
+		}),
+	runTrigger: (id: string, triggerId: string) =>
+		request<RunTriggerResponse>(
+			`/projects/${encodeURIComponent(id)}/triggers/${encodeURIComponent(triggerId)}/run`,
+			{ method: "POST", body: {} },
+		),
 };
 
 /* ----------------------------------------------------------------------- */

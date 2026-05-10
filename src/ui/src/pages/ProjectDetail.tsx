@@ -1,11 +1,12 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft } from "lucide-react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { ApiError, projectsApi } from "@/api/client.ts";
 import type {
 	DefaultsConfig,
 	ProjectRow,
-	Trigger,
+	RunTriggerResponse,
+	TriggerSummary,
 	WarrenConfigFileError,
 	WarrenConfigResponse,
 } from "@/api/types.ts";
@@ -65,6 +66,7 @@ export function ProjectDetailPage() {
 				<>
 					<ProjectMetaCard project={project} />
 					<WarrenConfigPanel
+						projectId={id}
 						query={warrenConfig.data}
 						isLoading={warrenConfig.isLoading}
 						error={warrenConfig.error}
@@ -121,10 +123,12 @@ function MetaRow({ label, value }: { label: string; value: React.ReactNode }) {
 }
 
 function WarrenConfigPanel({
+	projectId,
 	query,
 	isLoading,
 	error,
 }: {
+	projectId: string;
 	query: WarrenConfigResponse | undefined;
 	isLoading: boolean;
 	error: unknown;
@@ -151,7 +155,7 @@ function WarrenConfigPanel({
 					<WarrenConfigError error={error} />
 				) : query === undefined ? null : (
 					<>
-						<TriggersBlock triggers={query.triggers} />
+						<TriggersBlock projectId={projectId} />
 						<DefaultsBlock defaults={query.defaults} />
 						{query.errors.length > 0 ? <ErrorsBlock errors={query.errors} /> : null}
 					</>
@@ -176,52 +180,149 @@ function WarrenConfigError({ error }: { error: unknown }) {
 	return <p className="text-sm text-(--color-destructive)">{message}</p>;
 }
 
-function TriggersBlock({ triggers }: { triggers: Trigger[] | null }) {
+function TriggersBlock({ projectId }: { projectId: string }) {
+	const navigate = useNavigate();
+	const qc = useQueryClient();
+
+	// /projects/:id/triggers joins parsed YAML with the warren-side triggers
+	// table for last/next/lastRunId, plus a fresh croner re-parse per request
+	// — richer envelope than /warren-config's plain Trigger[] (mx-a93eb5).
+	const triggersQuery = useQuery({
+		queryKey: ["projects", projectId, "triggers"],
+		queryFn: ({ signal }) => projectsApi.triggers(projectId, signal),
+		enabled: projectId.length > 0,
+	});
+
+	const runNow = useMutation({
+		mutationFn: (triggerId: string) => projectsApi.runTrigger(projectId, triggerId),
+		onSuccess: (data: RunTriggerResponse) => {
+			qc.invalidateQueries({ queryKey: ["projects", projectId, "triggers"] });
+			qc.invalidateQueries({ queryKey: ["runs"] });
+			navigate(`/runs/${encodeURIComponent(data.run.id)}`);
+		},
+	});
+
 	return (
 		<section>
 			<h3 className="mb-2 text-sm font-semibold">
 				<code className="font-mono">.warren/triggers.yaml</code>
 			</h3>
-			{triggers === null ? (
-				<EmptyHint text="Not present (or last load failed — see errors below)." />
-			) : triggers.length === 0 ? (
-				<EmptyHint text="File is present but defines no triggers." />
+			{triggersQuery.isLoading ? (
+				<EmptyHint text="Loading…" />
+			) : triggersQuery.isError ? (
+				<p className="text-sm text-(--color-destructive)">
+					{triggersQuery.error instanceof Error
+						? triggersQuery.error.message
+						: String(triggersQuery.error)}
+				</p>
+			) : triggersQuery.data === undefined || triggersQuery.data.triggers.length === 0 ? (
+				<EmptyHint text="No triggers configured (edit .warren/triggers.yaml on the project repo to add one)." />
 			) : (
 				<ul className="space-y-2">
-					{triggers.map((t) => (
-						<li
+					{triggersQuery.data.triggers.map((t) => (
+						<TriggerRow
 							key={t.id}
-							className="rounded-md border bg-(--color-muted)/30 px-3 py-2 text-sm"
-						>
-							<div className="flex flex-wrap items-baseline gap-2">
-								<span className="font-mono font-semibold">{t.id}</span>
-								<Badge variant="secondary" className="font-mono text-xs">
-									{t.kind}
-								</Badge>
-								<code className="text-xs text-(--color-muted-foreground)">{t.cron}</code>
-								{t.timezone !== undefined ? (
-									<span className="text-xs text-(--color-muted-foreground)">
-										tz: {t.timezone}
-									</span>
-								) : null}
-							</div>
-							<dl className="mt-1.5 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs">
-								<dt className="text-(--color-muted-foreground)">seed</dt>
-								<dd className="font-mono">{t.seed}</dd>
-								<dt className="text-(--color-muted-foreground)">role</dt>
-								<dd className="font-mono">{t.role}</dd>
-								{t.prompt !== undefined ? (
-									<>
-										<dt className="text-(--color-muted-foreground)">prompt</dt>
-										<dd className="break-words">{t.prompt}</dd>
-									</>
-								) : null}
-							</dl>
-						</li>
+							trigger={t}
+							isRunning={runNow.isPending && runNow.variables === t.id}
+							onRunNow={() => runNow.mutate(t.id)}
+							runError={
+								runNow.isError && runNow.variables === t.id
+									? runNow.error instanceof Error
+										? runNow.error.message
+										: String(runNow.error)
+									: null
+							}
+						/>
 					))}
 				</ul>
 			)}
 		</section>
+	);
+}
+
+function TriggerRow({
+	trigger,
+	isRunning,
+	onRunNow,
+	runError,
+}: {
+	trigger: TriggerSummary;
+	isRunning: boolean;
+	onRunNow: () => void;
+	runError: string | null;
+}) {
+	return (
+		<li className="rounded-md border bg-(--color-muted)/30 px-3 py-2 text-sm">
+			<div className="flex flex-wrap items-center justify-between gap-2">
+				<div className="flex flex-wrap items-baseline gap-2">
+					<span className="font-mono font-semibold">{trigger.id}</span>
+					<Badge variant="secondary" className="font-mono text-xs">
+						{trigger.kind}
+					</Badge>
+					<code className="text-xs text-(--color-muted-foreground)">{trigger.cron}</code>
+					{trigger.timezone !== undefined ? (
+						<span className="text-xs text-(--color-muted-foreground)">
+							tz: {trigger.timezone}
+						</span>
+					) : null}
+				</div>
+				<Button
+					type="button"
+					variant="outline"
+					size="sm"
+					onClick={onRunNow}
+					disabled={isRunning}
+				>
+					{isRunning ? "Dispatching…" : "Run now"}
+				</Button>
+			</div>
+			<dl className="mt-1.5 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs">
+				<dt className="text-(--color-muted-foreground)">seed</dt>
+				<dd className="font-mono">{trigger.seed}</dd>
+				<dt className="text-(--color-muted-foreground)">role</dt>
+				<dd className="font-mono">{trigger.role}</dd>
+				{trigger.prompt !== undefined ? (
+					<>
+						<dt className="text-(--color-muted-foreground)">prompt</dt>
+						<dd className="break-words">{trigger.prompt}</dd>
+					</>
+				) : null}
+				<dt className="text-(--color-muted-foreground)">last fired</dt>
+				<dd>
+					{trigger.lastFiredAt !== null ? (
+						trigger.lastRunId !== null ? (
+							<Link
+								to={`/runs/${encodeURIComponent(trigger.lastRunId)}`}
+								className="underline-offset-2 hover:underline"
+								title={trigger.lastRunId}
+							>
+								{formatTimestamp(trigger.lastFiredAt)}
+							</Link>
+						) : (
+							formatTimestamp(trigger.lastFiredAt)
+						)
+					) : (
+						<span className="text-(--color-muted-foreground)">never</span>
+					)}
+				</dd>
+				<dt className="text-(--color-muted-foreground)">next fire</dt>
+				<dd>
+					{trigger.nextFireAt !== null ? (
+						formatTimestamp(trigger.nextFireAt)
+					) : (
+						<span className="text-(--color-muted-foreground)">—</span>
+					)}
+				</dd>
+			</dl>
+			{trigger.parseError !== null ? (
+				<p className="mt-1.5 text-xs text-(--color-destructive)">
+					cron parse error: {trigger.parseError}
+				</p>
+			) : null}
+			{runError !== null ? (
+				<p className="mt-1.5 text-xs text-(--color-destructive)">{runError}</p>
+			) : null}
+		</li>
 	);
 }
 

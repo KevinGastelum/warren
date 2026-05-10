@@ -197,3 +197,42 @@ export interface WarrenConfigResponse {
 	/** Per-file failures collected during this load. Empty on full success. */
 	errors: WarrenConfigFileError[];
 }
+
+/* ----------------------------------------------------------------------- */
+/* Trigger summaries — `GET /projects/:id/triggers` (warren-99c3).         */
+/*                                                                         */
+/* Joins parsed .warren/triggers.yaml entries with the warren-side         */
+/* triggers table state (lastFiredAt, nextFireAt, lastRunId) and a fresh   */
+/* croner re-parse so the wire envelope reflects the current expression    */
+/* even when the persisted row is stale (mx-a93eb5). `parseError` is       */
+/* non-null when croner's strict parse rejects an expression that warren-  */
+/* config's loose 5/6-token check accepted.                                */
+/* ----------------------------------------------------------------------- */
+
+export interface TriggerSummary {
+	id: string;
+	kind: "cron";
+	cron: string;
+	seed: string;
+	role: string;
+	timezone?: string;
+	prompt?: string;
+	lastFiredAt: string | null;
+	nextFireAt: string | null;
+	lastRunId: string | null;
+	parseError: string | null;
+}
+
+export interface TriggersResponse {
+	triggers: TriggerSummary[];
+	errors: WarrenConfigFileError[];
+}
+
+/**
+ * `POST /projects/:id/triggers/:triggerId/run` returns the spawned run row
+ * plus the burrow summary — same envelope as `POST /runs` (mx-f3b48d).
+ */
+export interface RunTriggerResponse {
+	run: RunRow;
+	burrow: BurrowSummary;
+}
