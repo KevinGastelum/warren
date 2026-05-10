@@ -7,6 +7,83 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3] — 2026-05-09
+
+Third-dogfood follow-through. Closes the warren-on-warren findings from
+SPEC §11.G: agents now actually `git commit` (system prompt reaches the
+runtime, gitdir bind via burrow 0.2.7), reap distinguishes empty pushes
+from real work, successful pushes auto-open a GitHub PR, the dispatch
+form lets operators target a non-default branch, and `CANOPY_REPO_URL`
+is now optional thanks to inline built-in agents.
+
+### Added
+
+- **`feat(runs)`** — auto-open a GitHub PR after reap pushes the agent's
+  branch. Gated by `WARREN_AUTO_OPEN_PR` (default on); skipped when the
+  run isn't successful, the push lands no commits, the branch matches
+  `project.defaultBranch`, or `GITHUB_TOKEN` is unset. 422 "already
+  exists" is treated as success and the existing PR url is recovered.
+  Optional `WARREN_BASE_URL` embeds a back-link to the run in the PR
+  body (warren-f6af).
+- **`feat(runs)`** — reap distinguishes a real-work push from a no-op
+  push against an unchanged HEAD. After a successful push reap runs
+  `git rev-list --count <project.defaultBranch>..HEAD` and pins the
+  count on `ReapRunResult.commitsAhead`. When the count is 0, an extra
+  `reap.empty_push` system event fires and `reap.completed` carries
+  `commitsAhead: 0`. RunDetail's header shows a destructive
+  "empty push" badge or a green "+N commits" badge accordingly. SPEC
+  §4.3 step 6 documents the commit/push contract (warren-f3bb).
+- **`feat(runs)`** — dispatch composes `agent.system + delimiter + user
+  prompt` before posting to `POST /burrows/:id/runs`. Burrow's
+  claude-code runtime never reads `.canopy/agent.json`, so the canopy
+  `system` body (workspace map, rituals, commit-only invariant per
+  warren-1a09) was dead text on disk; it now actually reaches the model.
+  `runs.prompt` keeps the user-typed input verbatim — only the body sent
+  to burrow is composed.
+- **`feat(ui)`** — NewRun page exposes a free-text "Branch / tag / SHA
+  (optional)" field between project select and prompt textarea.
+  Placeholder mirrors the project's `defaultBranch`; empty submissions
+  are omitted from the `POST /runs` body so the server falls back to
+  `defaultBranch` as before (warren-7589).
+- **`feat(registry)`** — `CANOPY_REPO_URL` is now optional. Warren ships
+  default `claude-code` and `sapling` agents inline (`src/registry/builtins/`)
+  so a fresh deploy boots without a custom canopy library. When
+  `CANOPY_REPO_URL` *is* set, library agents override built-ins by name
+  and new names extend the catalog. `warren doctor` and `/readyz` no
+  longer fail when the canopy clone is absent (warren-d3e9).
+- **`test(acceptance)`** — scenario 04 drives the §4.3 composition flow
+  end-to-end against the in-proc warren+burrow harness. Asserts
+  `POST /runs` returns 201 with a `run_xxx` id and a populated
+  `renderedAgentJson`, and that the column is frozen at spawn time —
+  mutating the canopy fixture and re-running `POST /agents/refresh`
+  leaves the existing run unchanged while a fresh spawn picks up the
+  drift. `canopyRepoPath` is surfaced on `ScenarioCtx.fixtures` so
+  future scenarios can drive canopy-source mutations the same way
+  (warren-9f65).
+
+### Changed
+
+- **Burrow CLI bumped `0.2.6 → 0.2.7`** — pulls in the burrow-7a80
+  gitdir-bind fix. Host worktree gitdir is now visible inside the bwrap
+  sandbox, so agents can run `git commit` on their own workspaces. Two-
+  place pin (Dockerfile + `package.json` + `bun.lock`) per CLAUDE.md.
+- **TypeScript `5.9.3 → 6.0.3`** — dev dependency bump (dependabot).
+
+### Docs
+
+- **`docs(spec)`** — SPEC §11.G records the 2026-05-09 third dogfood.
+  Two warren-on-warren runs against `jayminwest/warren`: the first
+  reproduced the silent-empty-branch shape (`branchPushed: true`,
+  `ahead_by: 0`) — the trigger for warren-f3bb (reap-pushes-without-
+  committing observability gap) and warren-fead (`end_turn` while
+  waiting on foreground work). The second was the first warren-on-
+  warren run that actually shipped real work to the remote, validating
+  burrow-7a80 / 0.2.7 gitdir bind end-to-end and confirming
+  warren-f3bb's prompt-instruction-is-sufficient fix scope. Filed
+  warren-1a09 (P2: agent-side `git push` blocked by `/root/.gitconfig`
+  not being in burrow's bwrap ro-bind set; same architectural pattern
+  as warren-1eaa).
+
 ## [0.1.2] — 2026-05-09
 
 Second-dogfood hardening pass. Fixes the "stuck running, no branch" failure
