@@ -56,10 +56,10 @@ RUN apt-get update \
 ENV BUN_INSTALL=/usr/local
 RUN bun install -g \
     @os-eco/burrow-cli@0.2.7 \
-    @os-eco/canopy-cli@0.2.3 \
-    @os-eco/seeds-cli@0.4.1 \
-    @os-eco/mulch-cli@0.8.0 \
-    @os-eco/sapling-cli@0.3.1 \
+    @os-eco/canopy-cli@0.2.4 \
+    @os-eco/seeds-cli@0.4.3 \
+    @os-eco/mulch-cli@0.9.0 \
+    @os-eco/sapling-cli@0.3.2 \
     @anthropic-ai/claude-code@2.1.138
 
 # bun install -g skips lifecycle scripts by default, so claude-code's
