@@ -7,7 +7,7 @@
 **CLI:** `warren` / `wr` (TBD).
 **Package:** `@os-eco/warren` (TBD).
 
-V1 scope is the **manual run path**: connect canopy, add project, spawn run, watch events, steer/cancel. Scheduler (cron + webhooks) and library API exports are deferred to V2 — kept in this spec for context, marked **(V2)** where they appear.
+V1 scope is the **manual run path** plus the **cron half of the scheduler**: connect canopy, add project, spawn run, watch events, steer/cancel, and dispatch recurring runs from `.warren/triggers.yaml` + one-off seeds with `extensions.scheduledFor` (R-06, shipped 2026-05-11). Webhook triggers and library API exports are deferred to V2 — kept in this spec for context, marked **(V2)** where they appear.
 
 ---
 
@@ -37,7 +37,7 @@ In the UI:
 2. **Add project** — paste a GitHub URL. Warren clones it under `/data/projects/`.
 3. **Spawn run** — pick agent + project + prompt. Warren provisions a burrow, renders the canopy agent into it, dispatches the run, streams events to the UI.
 4. **Watch and steer** — live event tail, send steering messages, see seeds the agent files for itself, see mulch records the agent records as it learns.
-5. **Schedule** *(V2)* — "every 6 hours, run docs-bot against repo X" or "on PR open, run reviewer-bot." Cron and trigger-driven runs. Out of V1 scope; UI surface and HTTP routes return "deferred" placeholders.
+5. **Schedule** — "every 6 hours, run docs-bot against repo X" via `.warren/triggers.yaml`, or "dispatch this seed at 3am" via `extensions.scheduledFor`. Cron half shipped in V1 (R-06, §11.I); webhook/event-driven triggers (e.g. "on PR open, run reviewer-bot") remain V2.
 
 ### 2.2 What Warren is
 
@@ -45,7 +45,7 @@ In the UI:
 - The **glue**: shells out to mulch/seeds/canopy/sapling CLIs, talks to burrow over its HTTP API.
 - The **UI**: web frontend served from the same process.
 - The **agent registry**: reads canopy, surfaces installable roles.
-- *(V2)* The **scheduler**: cron and event-triggered runs.
+- The **scheduler**: in-process cron tick + scheduled-seed dispatch (V1, §11.I). Webhook/event-triggered runs deferred to V2.
 
 ### 2.3 What Warren is not
 
@@ -73,8 +73,7 @@ Warren is a thin coordinator — most of the value is in the four CLIs and burro
 - Durable event log: every event burrow streams is persisted in warren's SQLite so reload-after-crash and post-hoc inspection both work.
 
 **Deferred to V2** (kept in this spec for context, not built in V1):
-- Cron-scheduled runs and the scheduler tick loop.
-- GitHub webhook receiver and signature verification.
+- GitHub webhook receiver and signature verification (the event-driven half of the scheduler — cron half shipped in V1, §11.I).
 - `@os-eco/warren` library API exports — internal-only `Client` is fine for V1.
 
 ### 3.2 V1 Non-Goals
@@ -195,7 +194,7 @@ The agent's worklist (seeds) belongs to the project, not the agent. Same project
 Three processes inside the container, supervised by a small Bun parent (see §10.3):
 
 - **supervisor** — `src/supervisor/main.ts`, ~50–100 LOC. Spawns warren and burrow as children, forwards SIGTERM/SIGINT, restarts `burrow serve` on unexpected exit (with a budget), exits non-zero on warren crash.
-- **`warren`** — Bun.serve, the platform process. HTTP API + UI. (V2: scheduler tick + webhook receiver run inside this process.)
+- **`warren`** — Bun.serve, the platform process. HTTP API + UI + scheduler tick (single-flight in-process loop, §11.I). The V2 webhook receiver will run in the same process.
 - **`burrow serve`** — Bun.serve bound to a unix socket at `/var/run/burrow.sock`, the runtime substrate. Owns SQLite + sandboxes.
 
 Plus short-lived shell-outs to `cn`, `sd`, `ml`, `git` invoked from the warren process.
@@ -234,7 +233,7 @@ Verified empirically on Docker 28.4 / Ubuntu 24.04. Same recipe applies to Fly.i
 | Logging | **pino** | Match burrow. |
 | Frontend | **React + Vite + shadcn/ui + Tailwind** | SPA served as static files from warren. shadcn for component primitives (copy-in, no runtime dep), Tailwind for styling. Build output lives at `src/ui/dist/`, served by the same Bun.serve. |
 | Burrow client | **`HttpClient` from `@os-eco/burrow`** (§15.6) | Typed mirror of burrow's library API over the unix socket. No hand-written HTTP. |
-| Cron | **(V2)** in-process timer | Deferred. |
+| Cron | **`croner`** (in-process tick) | Tz/DST-aware, ~30 KB, no native deps. Single in-process tick wrapped in a single-flight guard; cadence via `WARREN_SCHEDULER_TICK_MS` (§11.I). |
 
 No HTTP framework on the server. No Postgres, no Redis, no Docker-in-Docker.
 
@@ -297,7 +296,16 @@ warren/
 │   │       ├── run.ts
 │   │       └── doctor.ts
 │   ├── ui/                     # React + Vite + shadcn/ui SPA, build output served by server
-│   └── scheduler/              # (V2) cron tick + GitHub webhook receiver
+│   ├── triggers/               # in-process cron tick + scheduled-seed dispatch (§11.I, R-06)
+│   │   ├── schema.ts           # TriggerSummary wire envelope
+│   │   ├── repo.ts             # triggers table CRUD (composite-string PK)
+│   │   ├── cron.ts             # croner facade — parse + nextRun
+│   │   ├── seeds-extension.ts  # sd list / sd update --extensions shell-out
+│   │   ├── dispatch.ts         # spawnRun with trigger='cron'|'scheduled'
+│   │   ├── tick.ts             # single-flight tick loop
+│   │   ├── config.ts           # WARREN_SCHEDULER_TICK_MS / WARREN_SCHEDULER_DISABLED
+│   │   └── errors.ts
+│   └── scheduler/              # (V2) GitHub webhook receiver
 ├── data/                       # gitignored, runtime state (mounted volume in deploy)
 └── docker/
     └── burrow-base/            # if base image lives here vs burrow repo
@@ -319,6 +327,8 @@ GET    /projects                — list cloned project repos
 POST   /projects                — { gitUrl, defaultBranch? } → clone
 DELETE /projects/:id            — remove project
 GET    /projects/:id/warren-config — parsed .warren/ envelope (§11.H, R-02)
+GET    /projects/:id/triggers   — parsed triggers.yaml joined with last/next-fire state (§11.I, R-06)
+POST   /projects/:id/triggers/:triggerId/run — Run Now: dispatch trigger inline with trigger='manual'
 
 POST   /runs                    — { agent, project, prompt } → spawn
 GET    /runs                    — list with filters (status, agent, project)
@@ -331,10 +341,7 @@ GET    /healthz                 — liveness
 GET    /readyz                  — readiness (canopy reachable, burrow reachable)
 
 # V2 — deferred
-GET    /schedules               — list cron + trigger schedules
-POST   /schedules               — { name, cron|webhook, agent, project, prompt }
-DELETE /schedules/:id
-POST   /webhooks/github         — GitHub webhook target
+POST   /webhooks/github         — GitHub webhook target (event-driven trigger half of the scheduler)
 ```
 
 Auth: `Authorization: Bearer ${WARREN_API_TOKEN}` on every route except `/healthz`. Warren expects HTTPS termination at a reverse proxy (Caddy on home server, Fly's edge on Fly.io); it does not terminate TLS itself. Token is single-user, single-value, no rotation in V1 — see §11 for the security posture.
@@ -390,7 +397,7 @@ runs (
   started_at TEXT,
   ended_at TEXT,
   prompt TEXT,
-  trigger TEXT                  -- 'manual' (V2: 'cron:<sched_id>' | 'webhook:<sched_id>')
+  trigger TEXT                  -- 'manual' | 'cron' | 'scheduled' (V2 adds 'webhook'); arbitrary strings accepted (mx-513713)
 );
 
 events (
@@ -404,19 +411,19 @@ events (
 );
 -- Index: events(run_id, burrow_event_seq) for ordered replay; events(run_id, ts) for time queries.
 
--- V2 — deferred
-schedules (
-  id TEXT PRIMARY KEY,          -- sched_xxx
-  name TEXT,
-  kind TEXT,                    -- 'cron' | 'webhook'
-  spec TEXT,                    -- cron expression or webhook event filter
-  agent_name TEXT,
-  project_id TEXT,
-  prompt_template TEXT,
-  enabled INTEGER,
-  created_at TEXT
+-- V1 — scheduler state (R-06, §11.I)
+triggers (
+  id TEXT PRIMARY KEY,          -- composite: '<projectId>:<triggerId>'
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  last_fired_at TEXT,
+  next_fire_at TEXT,
+  last_run_id TEXT REFERENCES runs(id) ON DELETE SET NULL
 );
+-- Trigger definitions themselves live in <projectPath>/.warren/triggers.yaml; this
+-- table only holds dispatch state. Row identity comes from the YAML entry's
+-- triggerId (mx-55296f); a project delete cascades, a run delete clears the back-ref.
 
+-- V2 — deferred
 webhook_secrets (
   source TEXT PRIMARY KEY,      -- 'github'
   secret TEXT
@@ -617,11 +624,104 @@ exercises absent / valid / malformed against `/readyz` rather than spawning
 `warren doctor` as a child, because doctor would be running against the
 wrong DB (`mx-e959c0` documents the rationale).
 
-**Scope deliberately deferred to R-04 / R-06.** `defaults.defaultRole` is
+**Scope deliberately deferred to R-04.** `defaults.defaultRole` is
 parsed but spawn still falls back to `WARREN_DEFAULT_AGENT`;
-`defaults.defaultPrompt` has no template-substitution consumer yet;
-`triggers` are parsed but never dispatched. R-06 (cron scheduler) is the
-direct downstream consumer and is now fully unblocked.
+`defaults.defaultPrompt` has no template-substitution consumer yet. As of
+2026-05-11 the trigger half is no longer deferred — R-06 (§11.I) dispatches
+`triggers.yaml` entries on a 60s tick.
+
+### 11.I Scheduler (cron + scheduled-for, 2026-05-11)
+
+R-06 from `ROADMAP.md` shipped via plan `pl-2f15` (warren-3f59). The
+scheduler is the only consumer of the trigger half of `.warren/` (§11.H) and
+the warren-side consumer of seeds' `extensions.scheduledFor` (seeds v0.4.3).
+
+**Sources.** Two trigger kinds dispatch per tick:
+
+- **Cron** — entries in `<projectPath>/.warren/triggers.yaml` with `kind: cron`
+  and a cron expression. Warren-config parses the YAML (loose 5-or-6-token
+  validation, `mx-40fe51`); the scheduler hands the expression to `croner`
+  for the strict pass at fire time (`mx-5199d0`). Dispatched runs carry
+  `trigger='cron'`.
+- **Scheduled seeds** — `sd list --format json` against the project's
+  `.seeds/` finds seeds whose `extensions.scheduledFor` (ISO-8601) is in
+  the past. Dispatched runs carry `trigger='scheduled'`. The `trigger` column
+  accepts arbitrary strings (`mx-513713`); current call-sites are `'manual'`
+  (default and Run Now), `'cron'`, and `'scheduled'`.
+
+**Tick.** One in-process loop, lives inside `bootServer`'s lifecycle. Cadence
+via `WARREN_SCHEDULER_TICK_MS` (positive int, default 60000); disable with
+`WARREN_SCHEDULER_DISABLED=1` (`mx-8e42e9`). The tick wraps itself in a
+single-flight guard so a slow tick can't pile up — overlap is impossible,
+worst case is reduced effective cadence rather than duplicated fires
+(`mx-eb4a3a`). Acceptance harness compresses the cadence to 1s globally via
+`scripts/acceptance/run.ts` extra-env (`mx-883866`). Teardown order on
+shutdown is `handle.stop()` (HTTP listener) → `scheduler.stop()` →
+`bridges.stopAll()` → burrow stop (`mx-15bd97`).
+
+**Table shape.** Migration 0005 adds the `triggers` table (see §9). PK is a
+composite string `'<projectId>:<triggerId>'` (`mx-55296f`), not a multi-column
+key. `project_id` FK cascades on project delete; `last_run_id` FK is
+`ON DELETE SET NULL` so reaping an old run never blocks the trigger row.
+`TriggersRepo.upsert` uses undefined-vs-null semantics on patch fields:
+omitted (`undefined`) preserves the existing value, explicit `null` clears
+it (`mx-18a708`). First observation of a fresh trigger seeds
+`lastFiredAt=now` and computes `nextFireAt = parsedCron.nextRun(now)`
+(`mx-ac8acd`) — a fresh row never fires immediately, which is what gives the
+"no catch-up after downtime" property.
+
+**Failure semantics.**
+- *Catch-up after warren downtime:* no. Cron is "fire at time T," not "fire
+  N missed runs." Operators who want replay press Run Now.
+- *Closed or missing referenced seed:* skip + structured log + surface as a
+  `lastSkipReason` on the trigger summary in `GET /triggers`. Not a hard
+  failure.
+- *Cron parse failure on a YAML entry:* surfaced in the warren-config errors
+  envelope on `GET /triggers` so operators see the failing entry without
+  tailing logs. Other triggers in the same file continue to fire.
+- *Project delete races with an in-flight tick:* per-project section of the
+  tick is wrapped in try/catch; the FK cascade on `triggers.project_id`
+  keeps the warren side consistent regardless.
+- *Timezone / DST:* per-trigger `timezone` field is supported by croner.
+  Default UTC when omitted. DST transitions in zoned triggers follow croner's
+  semantics (skip the "lost" hour, fire once for the "repeated" hour) —
+  document the chosen zone explicitly in `triggers.yaml`.
+
+**Seeds write path.** When a scheduled seed fires, the write order is:
+spawn run FIRST → if the spawn succeeds, attempt
+`sd update <seed> --extensions '{"scheduledFor": null, "lastScheduledRun": "<iso>"}'`
+(`mx-a2ea60`). The triggers row's `last_fired_at` is also written before
+the extension clear is attempted — warren's DB is the source of truth, and
+a failed clear gets surfaced as a system event on the dispatched run rather
+than dropping the dispatch. This makes the duplicate-dispatch hazard fail
+safe: the next tick reads the warren row, sees the recent fire, and skips.
+
+**HTTP surface.** `GET /projects/:id/triggers` returns
+`{triggers: TriggerSummary[], errors: WarrenConfigFileError[]}` (`mx-a93eb5`).
+`POST /projects/:id/triggers/:triggerId/run` resolves the trigger from
+warren-config, dispatches inline with `trigger='manual'` (Run Now is a human
+press, not a cron fire), and returns the run row 201 (`mx-f3b48d`). Both
+routes require the project row first (`mx-fa6ac7`) and surface
+`WarrenConfigUnavailableError` if the loader can't read the YAML.
+
+**UI surface.** `TriggersBlock` in `src/ui/src/pages/ProjectDetail.tsx`
+(`mx-28b6a2`) renders the wire envelope: one row per trigger with cron
+expression + last/next fire columns + Run Now button. YAML editing remains a
+git operation per the R-02 read-only posture (`mx-a5e30e`).
+
+**Acceptance.** Scenario 15
+(`scripts/acceptance/scenarios/15-triggers-roundtrip.ts`) exercises three
+shapes (`mx-6fc1ef`): a cron entry that fires once without double-dispatch,
+a `scheduledFor` in the past + one in the future, and a trigger that
+references a missing or closed seed. The scenario bootstraps
+`.seeds/config.yaml` in the sample-source repo before driving the scheduler
+(`mx-fc2827`).
+
+**Adding new schema fields or new trigger kinds.** Per `mx-5339d5`, update
+three places in lockstep: ROADMAP R-06 (or its successor entry), this section
+(§11.I), and acceptance scenario 15. New `TriggerSchema` fields must stay
+additive (all-optional) so existing `triggers.yaml` files keep parsing —
+warren-config (R-02) and the dispatcher (R-06) co-own the schema.
 
 ---
 

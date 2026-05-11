@@ -390,65 +390,87 @@ user.
 ---
 
 ## R-06 — Cron scheduler
-Status: [proposed] — fully unblocked as of 2026-05-10.
-Depends on: R-02 (`.warren/triggers.yaml` is the trigger config home —
-**shipped 2026-05-10 via pl-5d74**, parsed schema available via
-`loadWarrenConfig` and `GET /projects/:id/warren-config`); R-01 (seeds
-`extensions.scheduledFor` for one-off scheduled runs — **seeds side shipped
-v0.4.3, including `sd ready --respect-schedule` to keep deferred seeds out of
-the ready queue**). Both prerequisites satisfied.
+Status: [shipped] 2026-05-11 via plan `pl-2f15` (parent seed `warren-3f59`).
+Depends on: R-02 (`.warren/triggers.yaml` parsed via `loadWarrenConfig`,
+shipped 2026-05-10 via pl-5d74); R-01 (seeds `extensions.scheduledFor` +
+`sd ready --respect-schedule`, shipped seeds v0.4.3). Both satisfied at
+implementation time.
 Unlocks: scheduled agent runs without leaving warren; nightly refactor /
-weekly docs-update / hourly triage-sweep workflows
+weekly docs-update / hourly triage-sweep workflows. SPEC §11.I covers the
+shipped contract; this entry is the design record.
 
 **Problem.** Warren's only trigger today is "manual via UI or CLI." Teams need
 recurring runs (nightly cleanup, weekly stale-issue triage) without standing
 up an external cron + webhook pair. That's a thin layer on warren's existing
 spawn path.
 
-**Sketch.** New module `src/triggers/`. Two trigger sources:
+**Shipped shape.** Module `src/triggers/` mirrors `src/warren-config/` layout
+(`errors.ts`, `config.ts`, `schema.ts`, `repo.ts`, `dispatch.ts`, `tick.ts`,
+`cron.ts`, `seeds-extension.ts`, `index.ts`). Two trigger sources:
 
 1. **Recurring (cron):** entries in `<projectPath>/.warren/triggers.yaml`
-   (R-02). Each entry references a seed (which carries the role, prompt, and
-   any other metadata) and a cron expression.
-2. **One-off (scheduled-for):** seeds with
-   `extensions.scheduledFor: <ISO8601>` get dispatched at that time exactly
-   once. After dispatch, the field is cleared (or moved to
-   `extensions.lastScheduledRun`).
+   (R-02). Each entry has a cron expression and dispatches a warren run with
+   `trigger: 'cron'`. Cron parsing is `croner` (chosen for tz support, ~30 KB,
+   no native deps — `mx-5199d0`); warren-config keeps the loose 5-or-6-token
+   validation (`mx-40fe51`) and dispatch falls through to croner for the
+   strict pass at fire time.
+2. **One-off (scheduled-for):** seeds with `extensions.scheduledFor` in the
+   past dispatch with `trigger: 'scheduled'`. After dispatch, warren shells
+   out to `sd update --extensions` to move `scheduledFor` → `lastScheduledRun`
+   (`mx-a2ea60`). The triggers row is written **first** so a failed clear
+   can't cause double-dispatch on the next tick.
 
-A scheduler tick runs every 60s in-process (no external cron daemon). For
-each loaded project: walk `triggers.yaml`, compute next-fire-at against the
-last-fired-at in warren's DB, dispatch matching entries. Then walk
-`extensions.scheduledFor` across the project's seeds and dispatch any whose
-time has passed.
+A single in-process tick (60s by default, `WARREN_SCHEDULER_TICK_MS`) runs
+inside `bootServer`'s lifecycle; teardown is via `WarrenServerHandle.stop`
+(`mx-15bd97`). The tick wraps itself in a single-flight guard so a slow tick
+can't pile up (`mx-eb4a3a`). Disable with `WARREN_SCHEDULER_DISABLED=1`.
 
-Warren DB additions:
+Warren DB additions (migration 0005):
 
     triggers (
-      id TEXT PRIMARY KEY,            -- composite: <project>:<trigger-id>
-      project_id TEXT,
+      id TEXT PRIMARY KEY,            -- composite: <projectId>:<triggerId>
+      project_id TEXT NOT NULL,       -- FK projects(id) ON DELETE CASCADE
       last_fired_at TEXT,
       next_fire_at TEXT,
-      last_run_id TEXT
+      last_run_id TEXT                -- FK runs(id) ON DELETE SET NULL
     )
 
-Dispatched runs carry `trigger: "cron"` or `trigger: "scheduled"` so the UI
-can label them.
+Composite-string PK (`mx-55296f`) avoids a multi-column key; `TriggersRepo.upsert`
+uses undefined-vs-null semantics on patch fields so omitted means
+"preserve" and null means "clear" (`mx-18a708`).
 
-**UI:** Triggers tab on project detail. Lists `triggers.yaml` entries with
-next-fire-at and last-fire-at. Editor that round-trips through YAML. "Run
-now" button to dry-fire any trigger.
+**HTTP surface.** `GET /projects/:id/triggers` returns
+`{triggers: TriggerSummary[], errors: WarrenConfigFileError[]}` — parsed YAML
+joined with the triggers row's `lastFiredAt`/`nextFireAt`/`lastRunId` (`mx-a93eb5`).
+`POST /projects/:id/triggers/:triggerId/run` is the Run Now path: resolves
+the trigger from warren-config, dispatches inline with `trigger='manual'`
+(human-pressed Run Now is a manual dispatch, not a cron fire), returns the
+run row (`mx-f3b48d`).
 
-**Open questions.**
-- Cron implementation: bring our own (small, no deps) vs. use a library
-  (`node-cron` etc.). Lean small-implementation; the surface is tiny and
-  warren already has `Bun.serve` as its only runtime dep.
-- Timezone: per-trigger `timezone` field (R-02 already proposed it). Default
-  UTC. Surface in UI clearly so users don't get confused by DST.
-- Failure handling: if a trigger fires but the seed it references is closed,
-  what happens? Skip + log. If the seed doesn't exist? Skip + warn in UI.
-- Catch-up after warren downtime: if warren was down when a cron should have
-  fired, do we fire on boot? Lean no — cron is "fire at time T," not "fire
-  N missed runs." Match standard cron semantics.
+**UI.** `TriggersBlock` in `ProjectDetail` (`mx-28b6a2`) renders the wire
+envelope: per-trigger row with cron expression + last/next fire columns + a
+Run Now button. YAML editing remains a git operation per the R-02 read-only
+posture (`mx-a5e30e`).
+
+**Open questions — resolved.**
+- *Cron implementation:* picked `croner` over a homegrown parser. Cron has
+  enough corner cases (step values, ranges, DOW vs DOM, 6-token seconds) that
+  rolling our own would be wrong or grow into croner anyway. The "small
+  surface" argument only held if we skipped tz + DST, which we explicitly
+  want. Recorded as decision in mulch.
+- *Timezone:* per-trigger `timezone` schema field stays (R-02). Default UTC
+  when omitted. UI renders the tz next to the cron expression; SPEC §11.I
+  notes the DST gotchas.
+- *Failure handling:* closed/missing seed → skip + structured log + surface
+  as a `lastSkipReason` on the trigger summary (deferred to follow-up if
+  pressure shows up in production). Cron parse failures bubble through the
+  warren-config errors envelope on `GET /triggers` so operators see the
+  failing entry without tailing logs.
+- *Catch-up after warren downtime:* explicit no. Cron is "fire at time T,"
+  not "fire N missed runs." First observation of a fresh trigger seeds
+  `lastFiredAt=now` and computes `nextFireAt` from there (`mx-ac8acd`), so a
+  long outage skips silently and the operator can Run Now if they want
+  replay. Recorded as decision.
 
 ---
 
@@ -904,6 +926,20 @@ so subsequent revisions know what's already off the punch list.
   + `/readyz` add a `warren_config` check; acceptance scenario 14 covers
   absent / valid / malformed states. Triggers are parsed but not
   dispatched — R-06 picks them up next.
+- **Cron scheduler** (R-06, plan `pl-2f15`, 2026-05-11). In-process tick
+  (60s default, `WARREN_SCHEDULER_TICK_MS`) inside `bootServer`'s lifecycle
+  dispatches `.warren/triggers.yaml` entries as runs with `trigger='cron'`
+  and seeds with `extensions.scheduledFor` in the past with
+  `trigger='scheduled'`. New `src/triggers/` module + migration 0005
+  (`triggers` table, composite-string PK). Cron parsing via `croner` for
+  tz/DST support. `GET /projects/:id/triggers` returns parsed YAML joined
+  with last/next-fire state; `POST /projects/:id/triggers/:triggerId/run`
+  is the Run Now path. ProjectDetail UI renders last/next-fire columns +
+  Run Now button. Acceptance scenario 15 covers cron round-trip,
+  scheduled-for past+future, missing-seed skip. No catch-up after warren
+  downtime — standard cron semantics; first observation of a fresh
+  trigger seeds `lastFiredAt=now`. Webhook triggers (the V2 half of the
+  scheduler) remain deferred.
 
 ## Cross-repo readiness (2026-05-10)
 
@@ -950,10 +986,9 @@ all shipped, so several items that were "wait on the upstream" are now
    Small; folds naturally into R-04.
 4. **R-04** (project + issues UI) — biggest item. The team-of-ICs UX unlock.
    All seeds-side prereqs satisfied.
-5. **R-06** (cron scheduler) — depends on R-02. Seeds-side scheduling primitives
-   (`extensions.scheduledFor`, `sd ready --respect-schedule`) are ready. Can
-   land before R-04 if scheduling pressure is higher than issue-tracking
-   pressure.
+5. **R-06** (cron scheduler) — ✅ shipped 2026-05-11 (plan `pl-2f15`). In-process
+   tick + `triggers` table + HTTP surface + UI columns + Run Now + acceptance
+   scenario 15. Webhook receiver half remains V2.
 6. **R-05** (roles tab UI) — depends on R-03. Canopy's render contract is
    ready. Less load-bearing than R-04; land after the issue UX is solid.
 7. **R-11** (canopy + mulch meshing) — both upstreams shipped; entirely
