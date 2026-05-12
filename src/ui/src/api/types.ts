@@ -73,12 +73,20 @@ export interface BurrowSummary {
  * Wire-side input for `POST /runs`. `ref` is an optional branch / tag /
  * SHA the project clone should be checked out at before the run; omit
  * (or pass empty) to use `project.defaultBranch` (warren-1bb6, warren-7589).
+ *
+ * `providerOverride` / `modelOverride` are optional per-run overrides of
+ * the agent's `frontmatter.provider` / `frontmatter.model`. Empty strings
+ * are ignored. Runtimes that don't understand these fields (e.g.
+ * claude-code) drop them silently; pi-style multi-provider runtimes map
+ * them onto provider/model CLI flags.
  */
 export interface CreateRunInput {
 	agent: string;
 	project: string;
 	prompt: string;
 	ref?: string;
+	providerOverride?: string;
+	modelOverride?: string;
 }
 
 export interface SpawnRunResponse {

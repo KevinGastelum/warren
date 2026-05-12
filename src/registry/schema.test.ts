@@ -1,6 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { AgentSchemaError } from "./errors.ts";
-import { parseRenderedAgent, RenderResponseSchema } from "./schema.ts";
+import {
+	type AgentDefinition,
+	parseRenderedAgent,
+	RenderResponseSchema,
+	readProviderFrontmatter,
+	withProviderOverrides,
+} from "./schema.ts";
 
 const VALID = {
 	success: true,
@@ -90,5 +96,69 @@ describe("parseRenderedAgent", () => {
 		expect(() => parseRenderedAgent({ success: false })).toThrow(AgentSchemaError);
 		expect(() => parseRenderedAgent(null)).toThrow(AgentSchemaError);
 		expect(() => parseRenderedAgent("not an object")).toThrow(AgentSchemaError);
+	});
+});
+
+describe("readProviderFrontmatter", () => {
+	test("returns empty object when neither field is set", () => {
+		expect(readProviderFrontmatter({})).toEqual({});
+		expect(readProviderFrontmatter({ tags: ["agent"] })).toEqual({});
+	});
+
+	test("returns provider and model when both are strings", () => {
+		expect(readProviderFrontmatter({ provider: "openai", model: "gpt-4o" })).toEqual({
+			provider: "openai",
+			model: "gpt-4o",
+		});
+	});
+
+	test("ignores empty / non-string values", () => {
+		expect(readProviderFrontmatter({ provider: "", model: 42 })).toEqual({});
+		expect(readProviderFrontmatter({ provider: null, model: undefined })).toEqual({});
+	});
+});
+
+describe("withProviderOverrides", () => {
+	const BASE: AgentDefinition = {
+		name: "pi",
+		version: 1,
+		sections: { system: "hi" },
+		resolvedFrom: ["builtin:pi"],
+		frontmatter: { source: "builtin", provider: "anthropic" },
+	};
+
+	test("returns the same reference when no override is supplied", () => {
+		expect(withProviderOverrides(BASE, {})).toBe(BASE);
+		expect(withProviderOverrides(BASE, { providerOverride: "" })).toBe(BASE);
+		expect(withProviderOverrides(BASE, { providerOverride: "   " })).toBe(BASE);
+	});
+
+	test("folds provider override onto frontmatter", () => {
+		const result = withProviderOverrides(BASE, { providerOverride: "openai" });
+		expect(result).not.toBe(BASE);
+		expect(result.frontmatter.provider).toBe("openai");
+		// other frontmatter keys preserved
+		expect(result.frontmatter.source).toBe("builtin");
+	});
+
+	test("folds model override onto frontmatter without touching provider", () => {
+		const result = withProviderOverrides(BASE, { modelOverride: "gpt-4o" });
+		expect(result.frontmatter.model).toBe("gpt-4o");
+		expect(result.frontmatter.provider).toBe("anthropic");
+	});
+
+	test("trims whitespace from overrides", () => {
+		const result = withProviderOverrides(BASE, {
+			providerOverride: "  openai  ",
+			modelOverride: " gpt-4o ",
+		});
+		expect(result.frontmatter.provider).toBe("openai");
+		expect(result.frontmatter.model).toBe("gpt-4o");
+	});
+
+	test("does not mutate the input agent", () => {
+		const original = { ...BASE, frontmatter: { ...BASE.frontmatter } };
+		withProviderOverrides(BASE, { providerOverride: "openai", modelOverride: "gpt-4o" });
+		expect(BASE.frontmatter).toEqual(original.frontmatter);
 	});
 });

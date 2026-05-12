@@ -56,6 +56,54 @@ export interface AgentDefinition {
 }
 
 /**
+ * Well-known optional frontmatter fields the multi-provider surface reads:
+ *
+ *   provider — the runtime-side provider id (e.g. "anthropic", "openai",
+ *              "google", "deepseek"). Free-form string; burrow's piRuntime
+ *              maps it onto pi's --provider flag, claude-code ignores it.
+ *   model    — provider-specific model id (e.g. "claude-sonnet-4-6",
+ *              "gpt-4o", "gemini-2.0-pro"). Free-form string; the runtime
+ *              decides how to interpret it.
+ *
+ * Both stay in the open `frontmatter` bag (no schema rev) so a canopy
+ * author can set them inline. `POST /runs` accepts the same two fields
+ * as overrides; the spawn composer merges overrides on top of frontmatter
+ * before freezing onto `runs.rendered_agent_json`.
+ */
+export function readProviderFrontmatter(frontmatter: Readonly<Record<string, unknown>>): {
+	provider?: string;
+	model?: string;
+} {
+	const result: { provider?: string; model?: string } = {};
+	const p = frontmatter.provider;
+	if (typeof p === "string" && p.length > 0) result.provider = p;
+	const m = frontmatter.model;
+	if (typeof m === "string" && m.length > 0) result.model = m;
+	return result;
+}
+
+/**
+ * Return a new AgentDefinition with the operator's provider/model overrides
+ * folded into `frontmatter` (taking precedence over the agent's own values).
+ * Empty / whitespace-only overrides are ignored — they're treated the same
+ * as omitting the field. The original agent is not mutated.
+ */
+export function withProviderOverrides(
+	agent: AgentDefinition,
+	overrides: { providerOverride?: string; modelOverride?: string },
+): AgentDefinition {
+	const provider = overrides.providerOverride?.trim();
+	const model = overrides.modelOverride?.trim();
+	if ((provider === undefined || provider === "") && (model === undefined || model === "")) {
+		return agent;
+	}
+	const nextFrontmatter: Record<string, unknown> = { ...agent.frontmatter };
+	if (provider !== undefined && provider !== "") nextFrontmatter.provider = provider;
+	if (model !== undefined && model !== "") nextFrontmatter.model = model;
+	return { ...agent, frontmatter: nextFrontmatter };
+}
+
+/**
  * Parse and semantically validate the JSON body returned by
  * `cn render <name> --format json`. Throws `AgentSchemaError` for
  * any malformed or incomplete shape.

@@ -430,6 +430,8 @@ function createRunHandler(deps: ServerDeps): RouteHandler {
 	return async (ctx) => {
 		const body = await readJsonBody(ctx);
 		const ref = optionalString(body, "ref");
+		const providerOverride = optionalString(body, "providerOverride");
+		const modelOverride = optionalString(body, "modelOverride");
 		const result = await spawnRun({
 			repos: deps.repos,
 			burrowClient: deps.burrowClient,
@@ -441,6 +443,8 @@ function createRunHandler(deps: ServerDeps): RouteHandler {
 			projectsConfig: deps.projectsConfig,
 			projectSpawn: deps.spawn ?? defaultSpawn,
 			...(ref !== undefined ? { ref } : {}),
+			...(providerOverride !== undefined ? { providerOverride } : {}),
+			...(modelOverride !== undefined ? { modelOverride } : {}),
 			...(deps.warrenConfigs !== undefined ? { warrenConfigs: deps.warrenConfigs } : {}),
 		});
 		// Hand off to the bridge so events start flowing into warren.events

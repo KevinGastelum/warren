@@ -51,6 +51,7 @@ import {
 	type AgentDefinition,
 	parseRenderedAgent,
 	RenderResponseSchema,
+	withProviderOverrides,
 } from "../registry/schema.ts";
 import type { WarrenConfigCache } from "../warren-config/index.ts";
 import { parseBurrowConfig } from "./burrow_config.ts";
@@ -65,6 +66,15 @@ export interface SpawnRunInput {
 	readonly prompt: string;
 	readonly trigger?: string;
 	readonly metadata?: unknown;
+	/**
+	 * Optional per-run override of the agent's `frontmatter.provider`. When
+	 * set (and non-empty), the spawn composer folds it onto the frozen
+	 * agent definition before persisting `runs.rendered_agent_json`. Empty
+	 * / whitespace-only values are ignored — same shape as `ref`.
+	 */
+	readonly providerOverride?: string;
+	/** Optional per-run override of the agent's `frontmatter.model`. */
+	readonly modelOverride?: string;
 	/** Override the workspace seeder; defaults to `seedBurrowWorkspace`. */
 	readonly seedWorkspace?: (input: SeedBurrowWorkspaceInput) => Promise<unknown>;
 	readonly now?: () => Date;
@@ -107,7 +117,11 @@ export async function spawnRun(input: SpawnRunInput): Promise<SpawnRunResult> {
 
 	const agentRow = input.repos.agents.require(input.agentName);
 	const project = input.repos.projects.require(input.projectId);
-	const agent = readCachedAgent(agentRow.renderedJson, agentRow.name);
+	const baseAgent = readCachedAgent(agentRow.renderedJson, agentRow.name);
+	const agent = withProviderOverrides(baseAgent, {
+		...(input.providerOverride !== undefined ? { providerOverride: input.providerOverride } : {}),
+		...(input.modelOverride !== undefined ? { modelOverride: input.modelOverride } : {}),
+	});
 	const burrowConfig = parseBurrowConfig(agent.sections.burrow_config);
 
 	// Refresh the project clone to origin/<ref> so the run sees the

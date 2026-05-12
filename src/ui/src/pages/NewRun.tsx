@@ -9,6 +9,13 @@ import { Input } from "@/components/ui/input.tsx";
 import { Label } from "@/components/ui/label.tsx";
 import { Textarea } from "@/components/ui/textarea.tsx";
 
+function readFrontmatter(renderedJson: unknown): Record<string, unknown> {
+	if (typeof renderedJson !== "object" || renderedJson === null) return {};
+	const fm = (renderedJson as { frontmatter?: unknown }).frontmatter;
+	if (typeof fm !== "object" || fm === null || Array.isArray(fm)) return {};
+	return fm as Record<string, unknown>;
+}
+
 export function NewRunPage() {
 	const navigate = useNavigate();
 	const qc = useQueryClient();
@@ -27,6 +34,10 @@ export function NewRunPage() {
 	const [prompt, setPrompt] = useState("");
 	const [promptTouched, setPromptTouched] = useState(false);
 	const [ref, setRef] = useState("");
+	const [providerOverride, setProviderOverride] = useState("");
+	const [providerTouched, setProviderTouched] = useState(false);
+	const [modelOverride, setModelOverride] = useState("");
+	const [modelTouched, setModelTouched] = useState(false);
 
 	// Per-project defaults from `.warren/defaults.json` (R-02). When the project
 	// declares a `defaultRole` that matches a registered agent, auto-fill the
@@ -61,6 +72,26 @@ export function NewRunPage() {
 		setPrompt(defaultPrompt);
 	}, [promptTouched, defaultPrompt, prompt]);
 
+	// Pull provider/model defaults off the selected agent's frontmatter
+	// (warren-f8c0). Both are free-text strings — runtimes that don't
+	// support multi-provider just ignore them. Auto-fill stops once the
+	// operator types in either field.
+	const selectedAgent = agents.data?.agents.find((a) => a.name === agent);
+	const agentFrontmatter = readFrontmatter(selectedAgent?.renderedJson);
+	const agentProvider =
+		typeof agentFrontmatter.provider === "string" ? agentFrontmatter.provider : "";
+	const agentModel = typeof agentFrontmatter.model === "string" ? agentFrontmatter.model : "";
+	useEffect(() => {
+		if (providerTouched) return;
+		if (providerOverride === agentProvider) return;
+		setProviderOverride(agentProvider);
+	}, [providerTouched, agentProvider, providerOverride]);
+	useEffect(() => {
+		if (modelTouched) return;
+		if (modelOverride === agentModel) return;
+		setModelOverride(agentModel);
+	}, [modelTouched, agentModel, modelOverride]);
+
 	const spawn = useMutation({
 		mutationFn: (input: CreateRunInput) => runsApi.create(input),
 		onSuccess: (data) => {
@@ -73,11 +104,15 @@ export function NewRunPage() {
 		e.preventDefault();
 		if (agent.length === 0 || project.length === 0 || prompt.trim().length === 0) return;
 		const trimmedRef = ref.trim();
+		const trimmedProvider = providerOverride.trim();
+		const trimmedModel = modelOverride.trim();
 		spawn.mutate({
 			agent,
 			project,
 			prompt,
 			...(trimmedRef.length > 0 ? { ref: trimmedRef } : {}),
+			...(trimmedProvider.length > 0 ? { providerOverride: trimmedProvider } : {}),
+			...(trimmedModel.length > 0 ? { modelOverride: trimmedModel } : {}),
 		});
 	};
 
@@ -186,6 +221,53 @@ export function NewRunPage() {
 								Leave blank to use the project's default branch. Free text — no
 								remote-branch lookup yet.
 							</p>
+						</div>
+
+						<div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+							<div className="space-y-1.5">
+								<Label htmlFor="provider">Provider override (optional)</Label>
+								<Input
+									id="provider"
+									value={providerOverride}
+									onChange={(e) => {
+										setProviderOverride(e.target.value);
+										setProviderTouched(true);
+									}}
+									placeholder={agentProvider.length > 0 ? agentProvider : "anthropic, openai, …"}
+									autoComplete="off"
+									spellCheck={false}
+								/>
+								{!providerTouched && agentProvider.length > 0 ? (
+									<p className="text-xs text-(--color-muted-foreground)">
+										Defaulted from agent frontmatter.
+									</p>
+								) : (
+									<p className="text-xs text-(--color-muted-foreground)">
+										Free text — runtimes that don't support it ignore the field.
+									</p>
+								)}
+							</div>
+							<div className="space-y-1.5">
+								<Label htmlFor="model">Model override (optional)</Label>
+								<Input
+									id="model"
+									value={modelOverride}
+									onChange={(e) => {
+										setModelOverride(e.target.value);
+										setModelTouched(true);
+									}}
+									placeholder={
+										agentModel.length > 0 ? agentModel : "claude-sonnet-4-6, gpt-4o, …"
+									}
+									autoComplete="off"
+									spellCheck={false}
+								/>
+								{!modelTouched && agentModel.length > 0 ? (
+									<p className="text-xs text-(--color-muted-foreground)">
+										Defaulted from agent frontmatter.
+									</p>
+								) : null}
+							</div>
 						</div>
 
 						<div className="space-y-1.5">

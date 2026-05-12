@@ -514,6 +514,76 @@ describe("spawnRun", () => {
 		expect(calls).toHaveLength(0);
 	});
 
+	test("folds providerOverride + modelOverride onto frontmatter before freeze and seed (warren-f8c0)", async () => {
+		repos.agents.upsert({
+			name: "pi",
+			renderedJson: makeAgentJson({
+				name: "pi",
+				frontmatter: { source: "builtin", provider: "anthropic", model: "claude-sonnet-4-6" },
+			}),
+		});
+		const seedCalls: SeedBurrowWorkspaceInput[] = [];
+		const { client } = makeBurrowClient();
+		const result = await spawnRun({
+			repos,
+			burrowClient: client,
+			agentName: "pi",
+			projectId: "prj_xxxxxxxxxxxx",
+			prompt: "run",
+			providerOverride: "openai",
+			modelOverride: "gpt-4o",
+			seedWorkspace: async (input) => {
+				seedCalls.push(input);
+			},
+		});
+
+		// Seed sees the override-applied agent
+		expect(seedCalls).toHaveLength(1);
+		const seededFm = (seedCalls[0]?.agent.frontmatter ?? {}) as Record<string, unknown>;
+		expect(seededFm.provider).toBe("openai");
+		expect(seededFm.model).toBe("gpt-4o");
+		// Original builtin frontmatter preserved
+		expect(seededFm.source).toBe("builtin");
+
+		// Frozen rendered_agent_json carries the overrides
+		const stored = repos.runs.require(result.run.id).renderedAgentJson as {
+			frontmatter: Record<string, unknown>;
+		};
+		expect(stored.frontmatter.provider).toBe("openai");
+		expect(stored.frontmatter.model).toBe("gpt-4o");
+
+		// Cached agent row is untouched — the override is per-run, not per-agent
+		const reread = repos.agents.require("pi").renderedJson as {
+			frontmatter: Record<string, unknown>;
+		};
+		expect(reread.frontmatter.provider).toBe("anthropic");
+		expect(reread.frontmatter.model).toBe("claude-sonnet-4-6");
+	});
+
+	test("leaves frontmatter alone when overrides are empty / whitespace (warren-f8c0)", async () => {
+		repos.agents.upsert({
+			name: "pi",
+			renderedJson: makeAgentJson({
+				name: "pi",
+				frontmatter: { provider: "anthropic" },
+			}),
+		});
+		const { client } = makeBurrowClient();
+		const result = await spawnRun({
+			repos,
+			burrowClient: client,
+			agentName: "pi",
+			projectId: "prj_xxxxxxxxxxxx",
+			prompt: "run",
+			providerOverride: "  ",
+			modelOverride: "",
+			seedWorkspace: async () => undefined,
+		});
+		const stored = result.run.renderedAgentJson as { frontmatter: Record<string, unknown> };
+		expect(stored.frontmatter.provider).toBe("anthropic");
+		expect(stored.frontmatter.model).toBeUndefined();
+	});
+
 	test("skips refresh when projectsConfig is not wired (back-compat for tests)", async () => {
 		const { client, calls } = makeBurrowClient();
 		let refreshCalled = false;
