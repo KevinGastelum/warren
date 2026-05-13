@@ -197,7 +197,7 @@ export async function spawnRun(input: SpawnRunInput): Promise<SpawnRunResult> {
 			burrow.id,
 			agent.name,
 			composeDispatchPrompt(agent.sections.system, input.prompt),
-			input.metadata,
+			composeBurrowMetadata(input.metadata, agent.frontmatter),
 		);
 		const updated = input.repos.runs.attachBurrow(run.id, { burrowRunId: burrowRun.id });
 		return { run: updated, burrow, burrowRun, agent };
@@ -334,6 +334,28 @@ function readCachedAgent(raw: unknown, name: string): AgentDefinition {
 function formatError(err: unknown): string {
 	if (err instanceof Error) return err.message;
 	return String(err);
+}
+
+/**
+ * Merge the operator-supplied dispatch metadata with the post-override agent
+ * frontmatter so burrow's piRuntime can read provider/model from
+ * `Run.metadataJson.frontmatter` (burrow-b5b4). Without this, ctx.frontmatter
+ * is undefined inside burrow and buildPiArgv falls back to PI_DEFAULT_MODEL
+ * even when warren resolved a non-default per warren-618b / warren-f8c0.
+ *
+ * Operator metadata wins on key collisions except for `frontmatter`, which is
+ * always sourced from the agent — it's the resolved envelope, not a
+ * caller-supplied field.
+ */
+function composeBurrowMetadata(
+	operatorMetadata: unknown,
+	frontmatter: Record<string, unknown>,
+): Record<string, unknown> {
+	const base =
+		typeof operatorMetadata === "object" && operatorMetadata !== null
+			? (operatorMetadata as Record<string, unknown>)
+			: {};
+	return { ...base, frontmatter };
 }
 
 /**

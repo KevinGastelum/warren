@@ -255,6 +255,7 @@ describe("spawnRun", () => {
 				body: {
 					agentId: "refactor-bot",
 					prompt: "be a refactor agent\n\n---\n\nfix the flaky test",
+					metadata: { frontmatter: {} },
 				},
 			},
 		]);
@@ -302,9 +303,71 @@ describe("spawnRun", () => {
 			body: {
 				agentId: "refactor-bot",
 				prompt: "s\n\n---\n\np",
-				metadata: { runByOperator: "alice" },
+				metadata: { runByOperator: "alice", frontmatter: {} },
 			},
 		});
+	});
+
+	test("forwards agent.frontmatter as burrow run metadata so piRuntime gets provider/model (warren-d34e)", async () => {
+		repos.agents.upsert({
+			name: "pi",
+			renderedJson: makeAgentJson({
+				name: "pi",
+				frontmatter: { source: "builtin", provider: "anthropic", model: "claude-opus-4-7" },
+			}),
+		});
+		const { client, calls } = makeBurrowClient();
+		await spawnRun({
+			repos,
+			burrowClient: client,
+			agentName: "pi",
+			projectId: "prj_xxxxxxxxxxxx",
+			prompt: "p",
+			seedWorkspace: async () => undefined,
+		});
+
+		const dispatch = calls.find((c) => c.path === "/burrows/bur_aaaaaaaaaaaa/runs");
+		expect(dispatch).toBeDefined();
+		const body = dispatch?.body as { metadata: { frontmatter: Record<string, unknown> } };
+		expect(body.metadata.frontmatter.provider).toBe("anthropic");
+		expect(body.metadata.frontmatter.model).toBe("claude-opus-4-7");
+		expect(body.metadata.frontmatter.source).toBe("builtin");
+	});
+
+	test("dispatch metadata frontmatter reflects per-run + project-default overrides (warren-d34e)", async () => {
+		repos.agents.upsert({
+			name: "pi",
+			renderedJson: makeAgentJson({
+				name: "pi",
+				frontmatter: { provider: "pi", model: "pi-default" },
+			}),
+		});
+		const { client, calls } = makeBurrowClient();
+		await spawnRun({
+			repos,
+			burrowClient: client,
+			agentName: "pi",
+			projectId: "prj_xxxxxxxxxxxx",
+			prompt: "p",
+			providerOverride: "openai",
+			warrenConfigs: {
+				get: async () => ({
+					triggers: null,
+					defaults: { defaultProvider: "anthropic", defaultModel: "claude-opus-4-7" },
+					errors: [],
+				}),
+				invalidate: () => undefined,
+				clear: () => undefined,
+				size: () => 0,
+			},
+			seedWorkspace: async () => undefined,
+		});
+
+		const dispatch = calls.find((c) => c.path === "/burrows/bur_aaaaaaaaaaaa/runs");
+		const body = dispatch?.body as { metadata: { frontmatter: Record<string, unknown> } };
+		// Operator override wins for provider; project default wins for model.
+		expect(body.metadata.frontmatter.provider).toBe("openai");
+		expect(body.metadata.frontmatter.model).toBe("claude-opus-4-7");
 	});
 
 	test("rolls back: cancels the warren row and destroys the burrow when seeding fails", async () => {
