@@ -24,6 +24,7 @@
 
 import { backoffMs, RestartBudget } from "./budget.ts";
 import { defaultGitCredentialsRun, installGitCredentials } from "./git-credentials.ts";
+import { defaultGitIdentityRun, installGitAuthor } from "./git-identity.ts";
 import { waitForSocket } from "./socket.ts";
 import { TokenValidationError, validateBurrowAuthTokens } from "./tokens.ts";
 
@@ -441,6 +442,22 @@ if (import.meta.main) {
 		logger.error(
 			{ err: err instanceof Error ? err.message : String(err) },
 			"supervisor: failed to install git insteadOf rule",
+		);
+		process.exit(1);
+	}
+	try {
+		await installGitAuthor(
+			{ run: defaultGitIdentityRun, logger },
+			{
+				authorName: process.env.WARREN_GIT_AUTHOR_NAME,
+				authorEmail: process.env.WARREN_GIT_AUTHOR_EMAIL,
+				gitBinary: process.env.WARREN_GIT_BINARY,
+			},
+		);
+	} catch (err) {
+		logger.error(
+			{ err: err instanceof Error ? err.message : String(err) },
+			"supervisor: failed to install git identity",
 		);
 		process.exit(1);
 	}
