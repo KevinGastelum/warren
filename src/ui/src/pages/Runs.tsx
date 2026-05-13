@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { agentsApi, projectsApi, runsApi } from "@/api/client.ts";
 import { StateBadge } from "@/components/StateBadge.tsx";
@@ -14,11 +14,27 @@ import {
 	TableRow,
 } from "@/components/ui/table.tsx";
 import { relativeTime } from "@/lib/utils.ts";
+import { formatCostUsd } from "./RunDetail.tsx";
+
+// Opt-in cost column (warren-a7dc). The localStorage key persists the
+// operator's choice across navigations — pi runs are the only ones that
+// carry costUsd today, so for non-pi-heavy installs the column is mostly
+// noise and stays hidden by default.
+const COST_COLUMN_LS_KEY = "warren.runsList.showCostColumn";
 
 type Filter = "all" | { kind: "agent"; value: string } | { kind: "project"; value: string };
 
 export function RunsPage() {
 	const [filter, setFilter] = useState<Filter>("all");
+	const [showCost, setShowCost] = useState<boolean>(() => {
+		if (typeof window === "undefined") return false;
+		return window.localStorage.getItem(COST_COLUMN_LS_KEY) === "1";
+	});
+
+	useEffect(() => {
+		if (typeof window === "undefined") return;
+		window.localStorage.setItem(COST_COLUMN_LS_KEY, showCost ? "1" : "0");
+	}, [showCost]);
 
 	const filterApi = filter === "all" ? {} : { [filter.kind]: filter.value };
 	const runs = useQuery({
@@ -54,6 +70,19 @@ export function RunsPage() {
 					<Button>Dispatch a run</Button>
 				</Link>
 			</header>
+
+			<div className="flex flex-wrap items-center justify-between gap-3">
+				<div className="flex flex-wrap items-center gap-2">
+					<label className="ml-1 flex items-center gap-1 text-xs text-(--color-muted-foreground)">
+						<input
+							type="checkbox"
+							checked={showCost}
+							onChange={(e) => setShowCost(e.target.checked)}
+						/>
+						Show cost
+					</label>
+				</div>
+			</div>
 
 			<div className="flex flex-wrap gap-2">
 				<FilterPill
@@ -103,6 +132,7 @@ export function RunsPage() {
 									<TableHead>Agent</TableHead>
 									<TableHead>Project</TableHead>
 									<TableHead>Started</TableHead>
+									{showCost ? <TableHead className="text-right">Cost</TableHead> : null}
 								</TableRow>
 							</TableHeader>
 							<TableBody>
@@ -132,6 +162,15 @@ export function RunsPage() {
 										<TableCell className="text-(--color-muted-foreground)">
 											{relativeTime(r.startedAt)}
 										</TableCell>
+										{showCost ? (
+											<TableCell className="text-right font-mono text-xs">
+												{r.costUsd !== null ? (
+													formatCostUsd(r.costUsd)
+												) : (
+													<span className="text-(--color-muted-foreground)">—</span>
+												)}
+											</TableCell>
+										) : null}
 									</TableRow>
 								))}
 							</TableBody>

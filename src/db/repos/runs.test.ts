@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { NotFoundError, StateTransitionError } from "../../core/errors.ts";
+import { NotFoundError, StateTransitionError, ValidationError } from "../../core/errors.ts";
 import { isId } from "../../core/ids.ts";
 import { openDatabase, type WarrenDb } from "../client.ts";
 import { AgentsRepo } from "./agents.ts";
@@ -92,6 +92,53 @@ describe("RunsRepo", () => {
 		expect(tagged.state).toBe("queued");
 		const reread = repo.require(row.id);
 		expect(reread.burrowId).toBe("bur_xxxxxxxxxxxx");
+	});
+
+	test("create leaves cost + token columns null", () => {
+		const row = spawn();
+		expect(row.costUsd).toBeNull();
+		expect(row.tokensInput).toBeNull();
+		expect(row.tokensOutput).toBeNull();
+		expect(row.tokensCacheRead).toBeNull();
+		expect(row.tokensCacheWrite).toBeNull();
+	});
+
+	test("attachStats persists partial cost + token fields", () => {
+		const row = spawn();
+		const tagged = repo.attachStats(row.id, {
+			costUsd: 0.4567,
+			tokensInput: 1200,
+			tokensOutput: 340,
+		});
+		expect(tagged.costUsd).toBeCloseTo(0.4567);
+		expect(tagged.tokensInput).toBe(1200);
+		expect(tagged.tokensOutput).toBe(340);
+		expect(tagged.tokensCacheRead).toBeNull();
+		expect(tagged.tokensCacheWrite).toBeNull();
+		const reread = repo.require(row.id);
+		expect(reread.costUsd).toBeCloseTo(0.4567);
+		expect(reread.tokensInput).toBe(1200);
+	});
+
+	test("attachStats merges across calls — omitted fields preserved", () => {
+		const row = spawn();
+		repo.attachStats(row.id, { costUsd: 0.1, tokensInput: 100 });
+		const merged = repo.attachStats(row.id, { costUsd: 0.25, tokensOutput: 50 });
+		expect(merged.costUsd).toBeCloseTo(0.25);
+		expect(merged.tokensInput).toBe(100);
+		expect(merged.tokensOutput).toBe(50);
+	});
+
+	test("attachStats accepts explicit null to clear a field", () => {
+		const row = spawn();
+		repo.attachStats(row.id, { costUsd: 0.5 });
+		const cleared = repo.attachStats(row.id, { costUsd: null });
+		expect(cleared.costUsd).toBeNull();
+	});
+
+	test("attachStats throws when called with no fields", () => {
+		const row = spawn();
+		expect(() => repo.attachStats(row.id, {})).toThrow(ValidationError);
 	});
 
 	test("markRunning sets state and startedAt", () => {

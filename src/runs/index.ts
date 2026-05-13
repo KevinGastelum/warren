@@ -46,7 +46,9 @@ export {
 	type BridgeRunStreamInput,
 	type BridgeRunStreamResult,
 	bridgeRunStream,
+	type PiStatsClient,
 	type RecoverActiveRunStreamsInput,
 	type RecoverActiveRunStreamsResult,
 	recoverActiveRunStreams,
+	type SessionStats,
 } from "./stream.ts";

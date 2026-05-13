@@ -62,6 +62,36 @@ export interface BridgeLogger {
 	error?(obj: object, msg?: string): void;
 }
 
+/**
+ * Session-cumulative cost + token snapshot from pi's `get_session_stats`
+ * RPC (warren-a7dc, SPEC §pi). Pi reports cost in USD computed against the
+ * same models.json it dispatched against; warren persists the raw number
+ * rather than re-pricing tokens itself (plan alternative #5).
+ */
+export interface SessionStats {
+	readonly costUsd: number;
+	readonly tokensInput: number;
+	readonly tokensOutput: number;
+	readonly tokensCacheRead: number;
+	readonly tokensCacheWrite: number;
+}
+
+/**
+ * Transport-agnostic hook for `get_session_stats`. The bridge calls
+ * `fetch` at run-start (baseline) and run-end (terminal), then persists
+ * the delta via `RunsRepo.attachStats`. Returning `null` signals
+ * "stats unavailable" (e.g. RPC channel closed, agent isn't pi) and is
+ * treated as best-effort — the column stays null, the bridge keeps going.
+ * Throws are caught + logged; same outcome.
+ *
+ * Wiring is the registry's concern (src/server/bridges.ts): pass the
+ * client only for pi-runtime runs so non-pi bridges skip the snapshot
+ * entirely.
+ */
+export interface PiStatsClient {
+	fetch(burrowRunId: string, signal: AbortSignal): Promise<SessionStats | null>;
+}
+
 export interface BridgeRunStreamInput {
 	readonly runId: string;
 	/** Burrow's run id (column `runs.burrow_run_id`). */
@@ -73,6 +103,14 @@ export interface BridgeRunStreamInput {
 	/** Override the stream source (tests). Default: `client.http.runs.stream`. */
 	readonly source?: (signal: AbortSignal) => AsyncIterable<RunEvent>;
 	readonly logger?: BridgeLogger;
+	/**
+	 * Pi cost-stats consumer (warren-a7dc). Set when the bridged run uses
+	 * the pi runtime; the bridge then snapshots `get_session_stats` at
+	 * run-start + run-end and persists the delta via `RunsRepo.attachStats`.
+	 * Omit for non-pi runs — the stats columns stay null, identical to the
+	 * pre-warren-a7dc behaviour for claude-code/sapling runs.
+	 */
+	readonly piStats?: PiStatsClient;
 }
 
 export interface BridgeRunStreamResult {
@@ -117,6 +155,11 @@ export async function bridgeRunStream(input: BridgeRunStreamInput): Promise<Brid
 	let errored = false;
 	let claimed = false;
 	let terminalDetected: { outcome: RunTerminalState } | undefined;
+	// pi cost tracking (warren-a7dc). Baseline is fetched once on first
+	// observed event; terminal is fetched on the first `agent_end` we see
+	// (or, defensively, on terminalDetected). Both are best-effort.
+	let statsBaseline: Promise<SessionStats | null> | undefined;
+	let statsPersisted = false;
 
 	try {
 		for await (const event of source(ctrl.signal)) {
@@ -127,6 +170,16 @@ export async function bridgeRunStream(input: BridgeRunStreamInput): Promise<Brid
 					input.logger?.info?.({ runId, burrowRunId }, "bridge transitioned run queued → running");
 				}
 				claimed = true;
+				if (input.piStats !== undefined) {
+					statsBaseline = snapshotStats(
+						input.piStats,
+						burrowRunId,
+						ctrl.signal,
+						"baseline",
+						runId,
+						input.logger,
+					);
+				}
 			}
 			if (event.seq <= resumeSeq) {
 				skipped += 1;
@@ -143,6 +196,19 @@ export async function bridgeRunStream(input: BridgeRunStreamInput): Promise<Brid
 			written += 1;
 			broker.publish(runId, row);
 
+			if (!statsPersisted && input.piStats !== undefined && event.kind === "agent_end") {
+				statsPersisted = true;
+				await persistPiStatsDelta({
+					piStats: input.piStats,
+					burrowRunId,
+					runId,
+					repos,
+					baseline: statsBaseline,
+					signal: ctrl.signal,
+					logger: input.logger,
+				});
+			}
+
 			const outcome = detectRuntimeTerminal(event);
 			if (outcome !== null) {
 				terminalDetected = { outcome };
@@ -150,6 +216,18 @@ export async function bridgeRunStream(input: BridgeRunStreamInput): Promise<Brid
 					{ runId, burrowRunId, outcome, seq: event.seq },
 					"bridge observed runtime-terminal event; reap will finalize",
 				);
+				if (!statsPersisted && input.piStats !== undefined) {
+					statsPersisted = true;
+					await persistPiStatsDelta({
+						piStats: input.piStats,
+						burrowRunId,
+						runId,
+						repos,
+						baseline: statsBaseline,
+						signal: ctrl.signal,
+						logger: input.logger,
+					});
+				}
 				break;
 			}
 		}
@@ -249,6 +327,103 @@ function normalizeStream(value: unknown): EventStream | null {
 
 function toIsoString(ts: Date | string): string {
 	return ts instanceof Date ? ts.toISOString() : ts;
+}
+
+/**
+ * Snapshot pi's get_session_stats RPC, swallowing failures (transport
+ * error, channel closed, agent isn't pi). The `phase` tag lands in the
+ * log message so operators can tell baseline-failed from terminal-failed.
+ */
+async function snapshotStats(
+	client: PiStatsClient,
+	burrowRunId: string,
+	signal: AbortSignal,
+	phase: "baseline" | "terminal",
+	runId: string,
+	logger: BridgeLogger | undefined,
+): Promise<SessionStats | null> {
+	try {
+		return await client.fetch(burrowRunId, signal);
+	} catch (err) {
+		logger?.warn?.(
+			{
+				runId,
+				burrowRunId,
+				phase,
+				err: err instanceof Error ? err.message : String(err),
+			},
+			"pi get_session_stats failed; cost columns will stay null",
+		);
+		return null;
+	}
+}
+
+interface PersistPiStatsInput {
+	readonly piStats: PiStatsClient;
+	readonly burrowRunId: string;
+	readonly runId: string;
+	readonly repos: Repos;
+	readonly baseline: Promise<SessionStats | null> | undefined;
+	readonly signal: AbortSignal;
+	readonly logger?: BridgeLogger;
+}
+
+/**
+ * Compute (terminal − baseline) and persist via `RunsRepo.attachStats`.
+ * Resolved pi sessions reuse prior turns via `--continue`/`--session`, so
+ * `get_session_stats` always returns the session-cumulative number. The
+ * delta is the only safe per-run accounting (plan risk #3). If the
+ * baseline was missing (RPC failed at start), the delta defaults to the
+ * terminal value verbatim — better to over-attribute than under-report.
+ * Terminal failure leaves the row untouched.
+ */
+async function persistPiStatsDelta(input: PersistPiStatsInput): Promise<void> {
+	const terminal = await snapshotStats(
+		input.piStats,
+		input.burrowRunId,
+		input.signal,
+		"terminal",
+		input.runId,
+		input.logger,
+	);
+	if (terminal === null) return;
+	const baseline = input.baseline !== undefined ? await input.baseline : null;
+	const base: SessionStats = baseline ?? {
+		costUsd: 0,
+		tokensInput: 0,
+		tokensOutput: 0,
+		tokensCacheRead: 0,
+		tokensCacheWrite: 0,
+	};
+	const delta = {
+		costUsd: terminal.costUsd - base.costUsd,
+		tokensInput: terminal.tokensInput - base.tokensInput,
+		tokensOutput: terminal.tokensOutput - base.tokensOutput,
+		tokensCacheRead: terminal.tokensCacheRead - base.tokensCacheRead,
+		tokensCacheWrite: terminal.tokensCacheWrite - base.tokensCacheWrite,
+	};
+	try {
+		input.repos.runs.attachStats(input.runId, delta);
+		input.logger?.info?.(
+			{
+				runId: input.runId,
+				burrowRunId: input.burrowRunId,
+				costUsd: delta.costUsd,
+				tokensInput: delta.tokensInput,
+				tokensOutput: delta.tokensOutput,
+			},
+			"persisted pi session-stats delta",
+		);
+	} catch (err) {
+		input.logger?.warn?.(
+			{
+				runId: input.runId,
+				burrowRunId: input.burrowRunId,
+				err: err instanceof Error ? err.message : String(err),
+			},
+			"attachStats threw; cost columns may be inconsistent",
+		);
+	}
 }
 
 export interface RecoverActiveRunStreamsInput {

@@ -12,7 +12,7 @@
  */
 
 import { sql } from "drizzle-orm";
-import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { index, integer, real, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 export const RUN_STATES = ["queued", "running", "succeeded", "failed", "cancelled"] as const;
 export type RunState = (typeof RUN_STATES)[number];
@@ -105,6 +105,16 @@ export const runs = sqliteTable(
 		// branch == defaultBranch, no commits ahead, or the GitHub call itself
 		// errored (recorded as a `reap_failed` event with step=pr_open).
 		prUrl: text("pr_url"),
+		// Per-run cost + token accounting (warren-a7dc). All nullable: only the
+		// pi runtime reports session-cumulative stats via get_session_stats today,
+		// and even there the value is best-effort (null when the bridge can't
+		// snapshot the RPC). Cost is the persisted delta between run-start and
+		// run-end snapshots so resumed pi sessions don't double-count prior turns.
+		costUsd: real("cost_usd"),
+		tokensInput: integer("tokens_input"),
+		tokensOutput: integer("tokens_output"),
+		tokensCacheRead: integer("tokens_cache_read"),
+		tokensCacheWrite: integer("tokens_cache_write"),
 	},
 	(t) => [
 		index("runs_state_idx").on(t.state),

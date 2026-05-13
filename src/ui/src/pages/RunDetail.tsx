@@ -3,7 +3,7 @@ import { CircleStop, Send } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { runsApi } from "@/api/client.ts";
-import type { CancelRunResponse, ReapCompletedPayload, RunEvent } from "@/api/types.ts";
+import type { CancelRunResponse, ReapCompletedPayload, RunEvent, RunRow } from "@/api/types.ts";
 import { RUN_TERMINAL_STATES } from "@/api/types.ts";
 import { StateBadge } from "@/components/StateBadge.tsx";
 import { Badge } from "@/components/ui/badge.tsx";
@@ -131,6 +131,15 @@ export function RunDetailPage() {
 							>
 								PR ↗
 							</a>
+						) : null}
+						{r.costUsd !== null ? (
+							<Badge
+								variant="succeeded"
+								className="font-mono text-xs"
+								title={formatStatsTooltip(r)}
+							>
+								{formatCostUsd(r.costUsd)}
+							</Badge>
 						) : null}
 					</div>
 					<p className="mt-1 text-sm text-(--color-muted-foreground)">
@@ -345,6 +354,38 @@ function extractReapSummary(events: RunEvent[]): ReapCompletedPayload | null {
 		return ev.payload as ReapCompletedPayload;
 	}
 	return null;
+}
+
+/**
+ * Format `costUsd` for the header badge (warren-a7dc). Sub-dollar costs
+ * show three significant decimals so a $0.005 cache-only turn doesn't
+ * round to "$0.00"; anything ≥ $1 shows two decimals like a normal
+ * currency display.
+ */
+export function formatCostUsd(cost: number): string {
+	if (cost >= 1) return `$${cost.toFixed(2)}`;
+	if (cost === 0) return "$0.00";
+	const minor = cost.toFixed(3);
+	return `$${minor}`;
+}
+
+function formatTokens(n: number): string {
+	if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+	if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+	return String(n);
+}
+
+function formatStatsTooltip(r: RunRow): string {
+	const parts: string[] = [];
+	if (r.tokensInput !== null) parts.push(`${formatTokens(r.tokensInput)} in`);
+	if (r.tokensOutput !== null) parts.push(`${formatTokens(r.tokensOutput)} out`);
+	if (r.tokensCacheRead !== null && r.tokensCacheRead > 0) {
+		parts.push(`${formatTokens(r.tokensCacheRead)} cache-r`);
+	}
+	if (r.tokensCacheWrite !== null && r.tokensCacheWrite > 0) {
+		parts.push(`${formatTokens(r.tokensCacheWrite)} cache-w`);
+	}
+	return parts.length === 0 ? "session cost from pi get_session_stats" : parts.join(" · ");
 }
 
 function statusVariant(

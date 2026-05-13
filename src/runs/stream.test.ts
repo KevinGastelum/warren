@@ -4,6 +4,7 @@ import { BurrowClient } from "../burrow-client/index.ts";
 import { openDatabase, type WarrenDb } from "../db/client.ts";
 import { createRepos, type Repos } from "../db/repos/index.ts";
 import { RunEventBroker } from "./events.ts";
+import type { PiStatsClient, SessionStats } from "./stream.ts";
 import { bridgeRunStream, recoverActiveRunStreams } from "./stream.ts";
 
 function makeBurrowClient(): BurrowClient {
@@ -329,6 +330,220 @@ describe("bridgeRunStream", () => {
 			source: source([init]),
 		});
 		expect(result.terminalDetected).toBeUndefined();
+	});
+
+	test("piStats: snapshots baseline + terminal and persists the delta on agent_end", async () => {
+		const calls: { burrowRunId: string; phase: "baseline" | "terminal" }[] = [];
+		const responses: SessionStats[] = [
+			{
+				costUsd: 0.1,
+				tokensInput: 100,
+				tokensOutput: 50,
+				tokensCacheRead: 10,
+				tokensCacheWrite: 5,
+			},
+			{
+				costUsd: 0.75,
+				tokensInput: 600,
+				tokensOutput: 220,
+				tokensCacheRead: 40,
+				tokensCacheWrite: 12,
+			},
+		];
+		const piStats: PiStatsClient = {
+			async fetch(burrowRunId) {
+				const idx = calls.length;
+				calls.push({ burrowRunId, phase: idx === 0 ? "baseline" : "terminal" });
+				return responses[idx] ?? null;
+			},
+		};
+		await bridgeRunStream({
+			runId,
+			burrowRunId,
+			repos,
+			broker,
+			burrowClient: makeBurrowClient(),
+			piStats,
+			source: source([
+				evt(burrowRunId, 1, { kind: "agent_start" }),
+				evt(burrowRunId, 2, { kind: "text" }),
+				evt(burrowRunId, 3, { kind: "agent_end" }),
+			]),
+		});
+		expect(calls.map((c) => c.phase)).toEqual(["baseline", "terminal"]);
+		const after = repos.runs.require(runId);
+		expect(after.costUsd).toBeCloseTo(0.65);
+		expect(after.tokensInput).toBe(500);
+		expect(after.tokensOutput).toBe(170);
+		expect(after.tokensCacheRead).toBe(30);
+		expect(after.tokensCacheWrite).toBe(7);
+	});
+
+	test("piStats: undefined leaves cost columns null (parity with claude-code)", async () => {
+		await bridgeRunStream({
+			runId,
+			burrowRunId,
+			repos,
+			broker,
+			burrowClient: makeBurrowClient(),
+			source: source([
+				evt(burrowRunId, 1, { kind: "agent_start" }),
+				evt(burrowRunId, 2, { kind: "agent_end" }),
+			]),
+		});
+		const after = repos.runs.require(runId);
+		expect(after.costUsd).toBeNull();
+		expect(after.tokensInput).toBeNull();
+	});
+
+	test("piStats: only the first agent_end triggers the terminal snapshot", async () => {
+		let calls = 0;
+		const piStats: PiStatsClient = {
+			async fetch() {
+				calls += 1;
+				return {
+					costUsd: calls * 0.1,
+					tokensInput: calls * 100,
+					tokensOutput: calls * 50,
+					tokensCacheRead: 0,
+					tokensCacheWrite: 0,
+				};
+			},
+		};
+		await bridgeRunStream({
+			runId,
+			burrowRunId,
+			repos,
+			broker,
+			burrowClient: makeBurrowClient(),
+			piStats,
+			source: source([
+				evt(burrowRunId, 1, { kind: "agent_start" }),
+				evt(burrowRunId, 2, { kind: "agent_end" }),
+				evt(burrowRunId, 3, { kind: "agent_end" }),
+			]),
+		});
+		// One baseline + one terminal — the second agent_end is ignored.
+		expect(calls).toBe(2);
+	});
+
+	test("piStats: terminal fetch failure logs and leaves cost null", async () => {
+		const warns: object[] = [];
+		let phase = 0;
+		const piStats: PiStatsClient = {
+			async fetch() {
+				phase += 1;
+				if (phase === 1) {
+					return {
+						costUsd: 0.05,
+						tokensInput: 50,
+						tokensOutput: 20,
+						tokensCacheRead: 0,
+						tokensCacheWrite: 0,
+					};
+				}
+				throw new Error("rpc channel closed");
+			},
+		};
+		await bridgeRunStream({
+			runId,
+			burrowRunId,
+			repos,
+			broker,
+			burrowClient: makeBurrowClient(),
+			piStats,
+			logger: {
+				warn(obj) {
+					warns.push(obj);
+				},
+			},
+			source: source([
+				evt(burrowRunId, 1, { kind: "agent_start" }),
+				evt(burrowRunId, 2, { kind: "agent_end" }),
+			]),
+		});
+		const after = repos.runs.require(runId);
+		expect(after.costUsd).toBeNull();
+		expect(warns.length).toBeGreaterThanOrEqual(1);
+	});
+
+	test("piStats: baseline failure falls back to terminal value (best-effort)", async () => {
+		const fetches: string[] = [];
+		const piStats: PiStatsClient = {
+			async fetch() {
+				if (fetches.length === 0) {
+					fetches.push("baseline-fail");
+					throw new Error("rpc unavailable at start");
+				}
+				fetches.push("terminal-ok");
+				return {
+					costUsd: 0.3,
+					tokensInput: 200,
+					tokensOutput: 80,
+					tokensCacheRead: 0,
+					tokensCacheWrite: 0,
+				};
+			},
+		};
+		await bridgeRunStream({
+			runId,
+			burrowRunId,
+			repos,
+			broker,
+			burrowClient: makeBurrowClient(),
+			piStats,
+			source: source([
+				evt(burrowRunId, 1, { kind: "agent_start" }),
+				evt(burrowRunId, 2, { kind: "agent_end" }),
+			]),
+		});
+		const after = repos.runs.require(runId);
+		expect(after.costUsd).toBeCloseTo(0.3);
+		expect(after.tokensInput).toBe(200);
+	});
+
+	test("piStats: terminalDetected (non-pi runtime path) still attempts terminal snapshot", async () => {
+		let terminalCalled = false;
+		const piStats: PiStatsClient = {
+			async fetch(_burrow, _signal) {
+				if (!terminalCalled) {
+					// baseline
+					return {
+						costUsd: 0,
+						tokensInput: 0,
+						tokensOutput: 0,
+						tokensCacheRead: 0,
+						tokensCacheWrite: 0,
+					};
+				}
+				return null;
+			},
+		};
+		// Treat the terminal path defensively — a pi run that happens to
+		// emit a claude-code-shaped result event (forward-compat) should
+		// still snapshot before the bridge breaks.
+		await bridgeRunStream({
+			runId,
+			burrowRunId,
+			repos,
+			broker,
+			burrowClient: makeBurrowClient(),
+			piStats: {
+				async fetch() {
+					terminalCalled = true;
+					return null;
+				},
+			},
+			source: source([
+				evt(burrowRunId, 1, {
+					kind: "state_change",
+					stream: "system",
+					payload: { type: "result", subtype: "result", is_error: false },
+				}),
+			]),
+		});
+		expect(piStats).toBeDefined();
+		expect(terminalCalled).toBe(true);
 	});
 
 	test("bridge end calls broker.close so live subscribers return", async () => {

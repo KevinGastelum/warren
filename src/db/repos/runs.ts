@@ -53,6 +53,14 @@ export interface AttachBurrowInput {
 	burrowRunId?: string;
 }
 
+export interface AttachStatsInput {
+	costUsd?: number | null;
+	tokensInput?: number | null;
+	tokensOutput?: number | null;
+	tokensCacheRead?: number | null;
+	tokensCacheWrite?: number | null;
+}
+
 export class RunsRepo {
 	constructor(private readonly db: DrizzleDb) {}
 
@@ -71,6 +79,11 @@ export class RunsRepo {
 			prompt: input.prompt,
 			trigger: input.trigger,
 			prUrl: null,
+			costUsd: null,
+			tokensInput: null,
+			tokensOutput: null,
+			tokensCacheRead: null,
+			tokensCacheWrite: null,
 		};
 		this.db.insert(runs).values(row).run();
 		return row;
@@ -162,6 +175,37 @@ export class RunsRepo {
 			endedAt: now.toISOString(),
 			failureReason: terminal === "failed" ? failureReason : null,
 		};
+		this.db.update(runs).set(patch).where(eq(runs.id, id)).run();
+		return { ...current, ...patch };
+	}
+
+	/**
+	 * Persist per-run cost + token accounting (warren-a7dc). All fields are
+	 * optional patches — omitted fields preserve the existing value, explicit
+	 * `null` clears it. Mirrors `attachBurrow`'s partial-input semantics so the
+	 * bridge can land start-snapshot and end-snapshot writes on different turns
+	 * without juggling intermediate state. Throws ValidationError if no fields
+	 * were supplied, matching `attachBurrow`. The columns are nullable so
+	 * non-pi runs (or pi runs whose stats RPC failed) leave them at null.
+	 */
+	attachStats(id: string, input: AttachStatsInput): RunRow {
+		const keys: (keyof AttachStatsInput)[] = [
+			"costUsd",
+			"tokensInput",
+			"tokensOutput",
+			"tokensCacheRead",
+			"tokensCacheWrite",
+		];
+		if (keys.every((k) => input[k] === undefined)) {
+			throw new ValidationError("attachStats requires at least one stat field");
+		}
+		const current = this.require(id);
+		const patch: Partial<RunRow> = {};
+		for (const k of keys) {
+			if (input[k] !== undefined) {
+				(patch as Record<string, number | null>)[k] = input[k] as number | null;
+			}
+		}
 		this.db.update(runs).set(patch).where(eq(runs.id, id)).run();
 		return { ...current, ...patch };
 	}

@@ -62,6 +62,21 @@ export interface RunRow {
 	 * branch == defaultBranch) or the GitHub call errored.
 	 */
 	prUrl: string | null;
+	/**
+	 * Per-run cost in USD (warren-a7dc). Currently populated only for runs
+	 * dispatched against the `pi` runtime — the bridge snapshots
+	 * `get_session_stats` at run-start + run-end and persists the delta.
+	 * Null for non-pi runtimes and for pi runs whose stats RPC failed.
+	 */
+	costUsd: number | null;
+	/** Input tokens consumed (warren-a7dc); see `costUsd` for nullability. */
+	tokensInput: number | null;
+	/** Output tokens produced (warren-a7dc); see `costUsd` for nullability. */
+	tokensOutput: number | null;
+	/** Cache-read tokens (warren-a7dc); see `costUsd` for nullability. */
+	tokensCacheRead: number | null;
+	/** Cache-write tokens (warren-a7dc); see `costUsd` for nullability. */
+	tokensCacheWrite: number | null;
 }
 
 export interface BurrowSummary {

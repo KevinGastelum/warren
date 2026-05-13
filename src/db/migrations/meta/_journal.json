@@ -43,6 +43,13 @@
 			"when": 1778454827286,
 			"tag": "0005_add_triggers_table",
 			"breakpoints": true
+		},
+		{
+			"idx": 6,
+			"version": "6",
+			"when": 1778683956971,
+			"tag": "0006_add_run_cost_columns",
+			"breakpoints": true
 		}
 	]
 }
