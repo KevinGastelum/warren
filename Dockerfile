@@ -64,7 +64,8 @@ RUN bun install -g \
     @os-eco/seeds-cli@0.4.3 \
     @os-eco/mulch-cli@0.9.0 \
     @os-eco/sapling-cli@0.3.2 \
-    @anthropic-ai/claude-code@2.1.138
+    @anthropic-ai/claude-code@2.1.138 \
+    @earendil-works/pi-coding-agent@0.74.0
 
 # bun install -g skips lifecycle scripts by default, so claude-code's
 # postinstall (which downloads the platform-native `claude` binary) doesn't
