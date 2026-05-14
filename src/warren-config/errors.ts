@@ -11,6 +11,10 @@
  * file (triggers.yaml) doesn't hide a healthy sibling (defaults.json) from
  * the operator. Callers (HTTP, doctor, UI) render the errors envelope
  * verbatim.
+ *
+ * Non-fatal advisories (e.g. defaults.json deprecation, warren-5840) share
+ * the same shape and live alongside `errors` in a separate `warnings`
+ * array — the loader, doctor, and UI all treat them as informational.
  */
 
 import { WarrenError } from "../core/errors.ts";
@@ -20,12 +24,15 @@ export class WarrenConfigUnavailableError extends WarrenError {
 }
 
 /**
- * Stable codes for per-file failures collected by the loader. Surfaced to
- * the HTTP/UI/doctor layers; treat as a public contract.
+ * Stable codes for per-file failures and advisories collected by the
+ * loader. Surfaced to the HTTP/UI/doctor layers; treat as a public
+ * contract.
  */
 export const WARREN_CONFIG_FILE_ERROR_CODES = {
 	parseError: "warren_config_parse_error",
 	schemaError: "warren_config_schema_error",
+	/** Non-fatal: surfaced via `warnings`, not `errors`. */
+	deprecated: "warren_config_deprecated",
 } as const;
 
 export type WarrenConfigFileErrorCode =

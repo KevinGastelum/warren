@@ -3,12 +3,12 @@
  * (warren-bd22, R-02 producer-side affordance).
  *
  * Today the `.warren/` convention is purely loader-side: warren reads
- * `.warren/triggers.yaml` and `.warren/defaults.json` from a project clone
+ * `.warren/triggers.yaml` and `.warren/config.yaml` from a project clone
  * but offers no help producing them. This command closes that gap by
  * writing a canonical, schema-valid skeleton:
  *
  *   `.warren/triggers.yaml`  empty list with a comment header
- *   `.warren/defaults.json`  `{ "defaultRole": <name> }` (or `{}`)
+ *   `.warren/config.yaml`    YAML defaults block (post-warren-5840 layout)
  *
  * Two target modes:
  *
@@ -27,14 +27,17 @@
  * service identity — is deferred until warren has a sanctioned
  * project-repo write path beyond `git push` from reap.
  *
- * Refuses to overwrite either file. Schema is enforced at scaffold time
- * via `parseDefaultsConfig` so a malformed defaults blob is impossible
- * to write.
+ * Refuses to overwrite either file, including the legacy
+ * `.warren/defaults.json` left over from a pre-warren-5840 install — that
+ * file should be migrated via `warren config migrate` before scaffolding.
+ * Schema is enforced at scaffold time via `parseConfigFile` so a malformed
+ * defaults blob is impossible to write.
  */
 
 import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
+import yaml from "js-yaml";
 import { NotFoundError, ValidationError } from "../../core/errors.ts";
 import type { AgentsRepo } from "../../db/repos/agents.ts";
 import type { ProjectsRepo } from "../../db/repos/projects.ts";
@@ -43,7 +46,7 @@ import {
 	WARREN_CONFIG_FILES,
 	warrenConfigRelativePath,
 } from "../../warren-config/config.ts";
-import { type DefaultsConfig, parseDefaultsConfig } from "../../warren-config/schema.ts";
+import { type DefaultsConfig, parseConfigFile } from "../../warren-config/schema.ts";
 import type { CliContext } from "../output.ts";
 import { formatError, writeJsonLine } from "../output.ts";
 
@@ -91,6 +94,13 @@ const TRIGGERS_TEMPLATE = `# .warren/triggers.yaml — scheduled runs for this p
 []
 `;
 
+const CONFIG_HEADER = `# .warren/config.yaml — per-project warren defaults (warren-5840 layout).
+#
+# Supersedes the legacy .warren/defaults.json. Fields are all optional;
+# every key from the JSON layout works here unchanged. See SPEC §11.H
+# for the schema and .warren/MIGRATION.md for before/after examples.
+`;
+
 export async function runInit(
 	context: CliContext,
 	deps: InitDeps,
@@ -100,7 +110,8 @@ export async function runInit(
 		const targetDir = await resolveTargetDir(deps, args);
 		const warrenDir = join(targetDir, WARREN_CONFIG_DIR);
 		const triggersAbs = join(warrenDir, WARREN_CONFIG_FILES.triggers);
-		const defaultsAbs = join(warrenDir, WARREN_CONFIG_FILES.defaults);
+		const configAbs = join(warrenDir, WARREN_CONFIG_FILES.config);
+		const legacyDefaultsAbs = join(warrenDir, WARREN_CONFIG_FILES.defaults);
 
 		if (existsSync(triggersAbs)) {
 			throw new ValidationError(
@@ -108,25 +119,33 @@ export async function runInit(
 				{ recoveryHint: "edit the existing file by hand" },
 			);
 		}
-		if (existsSync(defaultsAbs)) {
+		if (existsSync(configAbs)) {
 			throw new ValidationError(
-				`refusing to overwrite existing ${warrenConfigRelativePath("defaults")} at ${defaultsAbs}`,
+				`refusing to overwrite existing ${warrenConfigRelativePath("config")} at ${configAbs}`,
 				{ recoveryHint: "edit the existing file by hand" },
+			);
+		}
+		if (existsSync(legacyDefaultsAbs)) {
+			throw new ValidationError(
+				`refusing to scaffold over legacy ${warrenConfigRelativePath("defaults")} at ${legacyDefaultsAbs}`,
+				{
+					recoveryHint: "run `warren config migrate` to convert defaults.json into config.yaml",
+				},
 			);
 		}
 
 		const defaults = await resolveDefaults(deps, args);
-		const defaultsJson = `${JSON.stringify(defaults, null, 2)}\n`;
+		const configYaml = `${CONFIG_HEADER}${renderConfigYaml(defaults)}`;
 
 		await mkdir(warrenDir, { recursive: true });
 		await writeFile(triggersAbs, TRIGGERS_TEMPLATE, "utf8");
-		await writeFile(defaultsAbs, defaultsJson, "utf8");
+		await writeFile(configAbs, configYaml, "utf8");
 
 		writeJsonLine(context.stdio.stdout, {
 			ok: true,
 			scaffolded: {
 				root: targetDir,
-				files: [warrenConfigRelativePath("triggers"), warrenConfigRelativePath("defaults")],
+				files: [warrenConfigRelativePath("triggers"), warrenConfigRelativePath("config")],
 				defaultRole: defaults.defaultRole ?? null,
 			},
 		});
@@ -185,11 +204,23 @@ async function resolveDefaults(deps: InitDeps, args: InitArgs): Promise<Defaults
 		}
 	}
 
-	const parsed = parseDefaultsConfig(candidate);
+	const parsed = parseConfigFile(candidate);
 	if (!parsed.ok) {
 		// Should not happen — we only put fields the schema knows about —
 		// but if it does, surface the schema message verbatim.
-		throw new ValidationError(`defaults.json failed schema validation: ${parsed.message}`);
+		throw new ValidationError(`config.yaml failed schema validation: ${parsed.message}`);
 	}
 	return parsed.value;
+}
+
+/**
+ * Render `DefaultsConfig` into the scaffolded YAML body. Empty objects
+ * render as `{}` rather than the empty string so the file always
+ * round-trips through `yaml.load` to the same schema-valid value.
+ */
+function renderConfigYaml(defaults: DefaultsConfig): string {
+	if (Object.keys(defaults).length === 0) {
+		return "{}\n";
+	}
+	return yaml.dump(defaults, { lineWidth: 100, noRefs: true });
 }

@@ -178,6 +178,7 @@ describe("runPreviewEvictionTick", () => {
 					: null,
 			prTemplate: null,
 			errors: [],
+			warnings: [],
 		});
 		const cache = createWarrenConfigCache({ load });
 		return {
@@ -450,6 +451,7 @@ describe("startPreviewEvictionWorker", () => {
 				defaults: null,
 				prTemplate: null,
 				errors: [],
+				warnings: [],
 			}),
 		});
 		const handle = startPreviewEvictionWorker({
@@ -479,6 +481,7 @@ describe("startPreviewEvictionWorker", () => {
 					defaults: null,
 					prTemplate: null,
 					errors: [],
+					warnings: [],
 				}),
 			}),
 			config: { ...BASE_CONFIG, disabled: true },

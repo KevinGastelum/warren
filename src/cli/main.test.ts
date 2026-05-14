@@ -14,11 +14,12 @@ function silentContext(): CliContext {
 }
 
 describe("buildProgram", () => {
-	test("registers all SPEC §8.2 subcommands + the `init` scaffolder + `db` admin group", () => {
+	test("registers all SPEC §8.2 subcommands + the `init` scaffolder + `db` admin group + `config` group", () => {
 		const program = buildProgram(silentContext());
 		const names = program.commands.map((c) => c.name()).sort();
 		expect(names).toEqual([
 			"add-project",
+			"config",
 			"db",
 			"doctor",
 			"init",
@@ -39,6 +40,19 @@ describe("buildProgram", () => {
 		const toOpt = migrateCmd?.options.find((o) => o.long === "--to");
 		expect(fromOpt?.mandatory).toBe(true);
 		expect(toOpt?.mandatory).toBe(true);
+	});
+
+	test("`config migrate` is registered under the config group (warren-5840)", () => {
+		const program = buildProgram(silentContext());
+		const configCmd = program.commands.find((c) => c.name() === "config");
+		expect(configCmd).toBeDefined();
+		const subNames = configCmd?.commands.map((c) => c.name()).sort() ?? [];
+		expect(subNames).toEqual(["migrate"]);
+		const migrateCmd = configCmd?.commands.find((c) => c.name() === "migrate");
+		const projectOpt = migrateCmd?.options.find((o) => o.long === "--project");
+		const cwdOpt = migrateCmd?.options.find((o) => o.long === "--cwd");
+		expect(projectOpt).toBeDefined();
+		expect(cwdOpt).toBeDefined();
 	});
 
 	test("--version reports the package VERSION constant", () => {

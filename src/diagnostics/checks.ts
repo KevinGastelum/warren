@@ -280,6 +280,66 @@ function defaultWarrenConfigLoad(projectPath: string): Promise<LoadedWarrenConfi
 }
 
 /**
+ * Walk every registered project, parse its `.warren/` directory, and
+ * surface any **non-fatal** advisories the loader collected — primarily
+ * the `defaults.json` deprecation introduced in warren-5840. Stays
+ * `ok: true` regardless so a legacy install doesn't flip `warren doctor`
+ * red; the message names the offending files and the migration command
+ * (`warren config migrate`) so operators have a one-shot fix to hand.
+ *
+ * Shares the load path with `checkWarrenConfig` so a cached read is reused
+ * across the two checks in one doctor run. The fatal-errors check stays
+ * the one that gates exit codes; this check is purely informational.
+ */
+export async function checkWarrenConfigDeprecations(
+	deps: CheckWarrenConfigDeps,
+): Promise<DiagnosticCheck> {
+	if (deps.projects.length === 0) {
+		return {
+			name: "warren_config_deprecations",
+			ok: true,
+			message: "no projects registered",
+		};
+	}
+
+	const items: string[] = [];
+
+	for (const project of deps.projects) {
+		let loaded: LoadedWarrenConfig;
+		try {
+			loaded =
+				deps.cache !== undefined
+					? await deps.cache.get(project.id, project.localPath)
+					: await (deps.load ?? defaultWarrenConfigLoad)(project.localPath);
+		} catch {
+			// Fatal load failures show up in `checkWarrenConfig`. Skip them
+			// here so this advisory check stays clean — operator-visible
+			// noise here would just duplicate the failure already named in
+			// the errors-only check.
+			continue;
+		}
+		for (const warning of loaded.warnings) {
+			items.push(`${project.id} ${warning.file}: ${warning.message}`);
+		}
+	}
+
+	if (items.length === 0) {
+		return {
+			name: "warren_config_deprecations",
+			ok: true,
+			message: `${deps.projects.length} project(s) checked, no .warren/ deprecations`,
+		};
+	}
+
+	return {
+		name: "warren_config_deprecations",
+		ok: true,
+		message: `${items.length} .warren/ deprecation(s): ${items.join("; ")}`,
+		hint: "run `warren config migrate --project <id>` to convert defaults.json to the .warren/ YAML layout",
+	};
+}
+
+/**
  * Probe burrow's socket via `BurrowClient.probe()`. Wraps transport
  * errors into the same readable shape `withTransportMapping` produces
  * for §4.3 spawn-flow callers. Used by `warren doctor`, which probes a

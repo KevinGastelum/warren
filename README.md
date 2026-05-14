@@ -113,25 +113,21 @@ Recognized fragment names: `title`, `summary`, `run`, `seeds`, `preview_url_or_p
 
 ### Per-run preview environments — click the agent's branch instead of checking it out
 
-When a project ships a `preview` block in `.warren/defaults.json`, warren launches `preview.command` as a sidecar inside the same burrow workspace after a successful run, allocates a port, and exposes the running app at `https://run-<runId>.<WARREN_PREVIEW_HOST>`. Reviewers click the URL instead of `git checkout`-ing the branch. Idle sessions are reaped automatically; the run-detail page surfaces a status badge and a manual teardown button. Opt in with two pieces:
+When a project ships a `.warren/preview.yaml`, warren launches `preview.command` as a sidecar inside the same burrow workspace after a successful run, allocates a port, and exposes the running app at `https://run-<runId>.<WARREN_PREVIEW_HOST>`. Reviewers click the URL instead of `git checkout`-ing the branch. Idle sessions are reaped automatically; the run-detail page surfaces a status badge and a manual teardown button. Opt in with two pieces:
 
 1. **Operator side.** Set `WARREN_PREVIEW_HOST=preview.<your-host>` and point a wildcard CNAME at the warren box (see [Per-run previews — operator setup](#per-run-previews--operator-setup) below). Without `WARREN_PREVIEW_HOST` the launch sub-step is a no-op (the run still completes, the URL just has no listener).
-2. **Project side.** Add a `preview` block to `.warren/defaults.json`:
+2. **Project side.** Ship `.warren/preview.yaml` with the preview block at the top level:
 
-   ```json
-   {
-     "preview": {
-       "type": "server",
-       "command": "bun run dev",
-       "port": 3000,
-       "readiness_path": "/healthz",
-       "idle_ttl": "30m",
-       "max_lifetime": "8h"
-     }
-   }
+   ```yaml
+   type: server
+   command: bun run dev
+   port: 3000
+   readiness_path: /healthz
+   idle_ttl: 30m
+   max_lifetime: 8h
    ```
 
-   Projects that don't opt in skip the preview sub-step entirely. See [SPEC §11.L](SPEC.md#11l-per-run-preview-environments-2026-05-14) for the full contract.
+   Projects that don't opt in skip the preview sub-step entirely. The block also still works nested under `preview:` in `.warren/config.yaml` for projects that keep everything in one file. See [SPEC §11.L](SPEC.md#11l-per-run-preview-environments-2026-05-14) for the full contract and [`.warren/MIGRATION.md`](.warren/MIGRATION.md) if you're moving from the legacy `defaults.json`.
 
 ## Per-run previews — operator setup
 
@@ -173,7 +169,7 @@ DNS providers Caddy's DNS-01 plugin supports include Cloudflare, Route 53, Digit
 | `WARREN_PREVIEW_EVICTION_TICK_MS` | `60000` | Sweep cadence. |
 | `WARREN_PREVIEW_EVICTION_DISABLED` | unset | `1` to disable the eviction worker (testing only). |
 
-Per-project overrides for `idle_ttl` and `max_lifetime` live in the project's `.warren/defaults.json` preview block; missing values fall back to the env defaults. `/readyz` surfaces `preview_port_allocator` saturation and `preview_max_live` headroom warnings.
+Per-project overrides for `idle_ttl` and `max_lifetime` live in `.warren/preview.yaml` (or the legacy `preview` block in `.warren/config.yaml` / `defaults.json`); missing values fall back to the env defaults. `/readyz` surfaces `preview_port_allocator` saturation and `preview_max_live` headroom warnings.
 
 **Remote workers (R-12) note.** When a run lands on a non-local worker, the proxy preamble returns **501** with an explicit R-12 deferral message — cross-host preview routing is V2 of this item. The acceptance scenario covers the assertion.
 

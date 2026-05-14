@@ -30,6 +30,7 @@ import {
 	checkPreviewAuthStrength,
 	checkPreviewPortAllocator,
 	checkWarrenConfig,
+	checkWarrenConfigDeprecations,
 	checkWarrenDb,
 	type DiagnosticCheck,
 	type WarrenConfigCheckProject,
@@ -93,6 +94,7 @@ export async function runDoctor(
 	checks.push(await checkBwrap({ spawn: context.spawn }));
 
 	checks.push(await checkWarrenConfig({ projects: deps.projects ?? [] }));
+	checks.push(await checkWarrenConfigDeprecations({ projects: deps.projects ?? [] }));
 
 	checks.push(await previewPortAllocatorCheck(context.env, deps.db));
 

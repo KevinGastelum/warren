@@ -129,14 +129,20 @@ prompt store) or seed `extensions` (per-issue metadata) is the wrong shape.
 But it's still git-tracked config that benefits from PR review, version
 history, and travels with the project.
 
-**Shipped shape.** Each project repo can grow a `.warren/` directory with two
-files. Both are optional — missing files are not errors, and the loader
+**Shipped shape.** Each project repo can grow a `.warren/` directory.
+All files are optional — missing files are not errors, and the loader
 returns a `null` entry per missing file so existing projects keep working
-unchanged. Format choice diverged from the original sketch:
+unchanged. The layout shipped JSON-for-defaults in R-02 and later
+hoisted into per-concern YAML in warren-5840 (under `pl-2c59`); both
+shapes load today, with the legacy file emitting a non-fatal deprecation
+warning:
 
     .warren/
       triggers.yaml      # cron triggers (and future webhook entries)
-      defaults.json      # per-project defaults — JSON, not YAML
+      config.yaml        # per-project defaults (canonical, YAML — warren-5840)
+      preview.yaml       # hoisted per-run preview block (warren-5840 / R-19)
+      pr-template.md     # per-fragment PR-body overrides (warren-bd49)
+      defaults.json      # legacy global defaults (JSON, deprecated by warren-5840)
 
 The YAML→JSON switch on `defaults` (sketch was `defaults.yaml`) was a
 deliberate format-symmetry decision: `defaults` is small, structurally
@@ -1342,9 +1348,12 @@ follow-ups under `pl-2c59`.
   `pl-2c59` — warrants more than a footer in the existing hardcoded
   body. R-19 only locks the `preview_url_or_placeholder` fragment
   contract; the broader template system is the sibling seed's job.
-- **`.warren/` reorg.** Single `defaults.json` works for V1 of R-19;
-  the move to one-file-per-concern YAML is a follow-up seed under the
-  same plan, with backcompat from `defaults.json`.
+- **`.warren/` reorg.** Shipped as warren-5840 under `pl-2c59`. The
+  canonical layout is now one file per concern: `triggers.yaml`,
+  `config.yaml`, `preview.yaml`, `pr-template.md`. Legacy
+  `defaults.json` still loads with a non-fatal deprecation warning;
+  `warren config migrate` converts in place. See SPEC §11.H and
+  `.warren/MIGRATION.md`.
 
 See SPEC §11.L for the full contract (schema, migration, sub-step
 ordering, auth scope, allocator semantics). Implementation steps live

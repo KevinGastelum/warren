@@ -1,9 +1,16 @@
 /**
- * Zod schemas for the per-project `.warren/` config files (R-02).
+ * Zod schemas for the per-project `.warren/` config files.
  *
- * Two files matter in this seed:
- *   triggers.yaml   array of trigger entries (YAML for cron readability)
- *   defaults.json   per-project defaults (JSON for symmetry)
+ * Files (warren-5840 reorg):
+ *   triggers.yaml    array of trigger entries (YAML for cron readability)
+ *   config.yaml      per-project defaults (canonical, YAML)
+ *   preview.yaml     hoisted preview block (PreviewConfigSchema at top level)
+ *   defaults.json    legacy per-project defaults (JSON, loader falls back here
+ *                    with a deprecation warning — same DefaultsConfigSchema)
+ *
+ * `parseConfigFile` parses `config.yaml` / legacy `defaults.json` against
+ * `DefaultsConfigSchema`. `parsePreviewFile` parses a standalone
+ * `preview.yaml` whose top-level document is the preview block itself.
  *
  * Triggers carry a `kind: 'cron'` discriminator even though only cron is
  * implemented today. Per pl-5d74 risk #1, this leaves room for future
@@ -194,9 +201,10 @@ export const DefaultsConfigSchema = z
 		runBranchPrefix: RunBranchPrefixSchema.optional(),
 		// warren-7be9 / SPEC §11.L: per-run preview environments (R-19).
 		// Missing-block is not an error — projects without a `preview` field
-		// simply skip the reap-time preview launch sub-step. File location
-		// stays `.warren/defaults.json` for V1; the broader `.warren/` YAML
-		// reorg lives in a follow-up seed under pl-2c59.
+		// simply skip the reap-time preview launch sub-step. Post-warren-5840
+		// the canonical home is `.warren/preview.yaml`; this nested field is
+		// still accepted on `config.yaml` / legacy `defaults.json` for smooth
+		// migration. When both exist `preview.yaml` wins (loader-side).
 		preview: PreviewConfigSchema.optional(),
 	})
 	.strict();
@@ -228,6 +236,34 @@ export function parseDefaultsConfig(raw: unknown): ParseResult<DefaultsConfig> {
 		return { ok: true, value: {} };
 	}
 	const parsed = DefaultsConfigSchema.safeParse(raw);
+	if (parsed.success) {
+		return { ok: true, value: parsed.data };
+	}
+	return { ok: false, message: parsed.error.issues.map(formatZodIssue).join("; ") };
+}
+
+/**
+ * Alias for `parseDefaultsConfig` used by the `config.yaml` loader path
+ * (warren-5840). The schema is identical — only the call site naming and
+ * the source filename differ — but the alias keeps the loader readable
+ * and gives future divergence a single seam to hook into.
+ */
+export function parseConfigFile(raw: unknown): ParseResult<DefaultsConfig> {
+	return parseDefaultsConfig(raw);
+}
+
+/**
+ * Parse a standalone `preview.yaml` (warren-5840). The top-level document
+ * is the preview block itself, not nested under a `preview:` key — that's
+ * the whole point of the file split. Empty / missing top-level is treated
+ * as "no preview configured" (parses to `null`) so operators can keep the
+ * file around as documentation without forcing a placeholder.
+ */
+export function parsePreviewFile(raw: unknown): ParseResult<PreviewConfig | null> {
+	if (raw === undefined || raw === null) {
+		return { ok: true, value: null };
+	}
+	const parsed = PreviewConfigSchema.safeParse(raw);
 	if (parsed.success) {
 		return { ok: true, value: parsed.data };
 	}

@@ -213,6 +213,7 @@ describe("runDoctor", () => {
 			"projects_root",
 			"bwrap",
 			"warren_config",
+			"warren_config_deprecations",
 			"preview_port_allocator",
 			"preview_auth_strength",
 			"burrow_reachable",

@@ -164,7 +164,7 @@ Inheritance solves the "thousand repos" problem: `base-coding-agent` defines def
 When warren spawns a run:
 
 1. **Resolve agent** — `cn render <agent-name>` against the canopy repo. Returns a single object with all sections expanded after inheritance/mixin resolution. The rendered JSON is persisted on the run row (`runs.rendered_agent_json`) and **frozen for the lifetime of the run** — mid-run edits to canopy do not affect in-flight runs. Run-time agent identity always reads from `runs.rendered_agent_json`, never from a re-render.
-2. **Provision burrow** — `POST /burrows` to burrow with `{ projectRoot, branch?, baseBranch?, network?, ... }` derived from the agent's `burrow_config` and the project's local clone path. Burrow returns 201 + `Burrow` (id, workspace path, branch, state). Warren records `burrow_id` on the run. The `branch` field is composed by warren as `${prefix}/${run.id}` where the prefix resolves project default (`.warren/defaults.json.runBranchPrefix`) > `WARREN_RUN_BRANCH_PREFIX` env > built-in `"burrow"` (warren-9993; the legacy default preserves backward compatibility). The warren `run_xxx` suffix makes the branch back-reference the warren run row on `git log` / PR review without a separate lookup.
+2. **Provision burrow** — `POST /burrows` to burrow with `{ projectRoot, branch?, baseBranch?, network?, ... }` derived from the agent's `burrow_config` and the project's local clone path. Burrow returns 201 + `Burrow` (id, workspace path, branch, state). Warren records `burrow_id` on the run. The `branch` field is composed by warren as `${prefix}/${run.id}` where the prefix resolves project default (`.warren/config.yaml.runBranchPrefix`, or the same field in legacy `.warren/defaults.json`) > `WARREN_RUN_BRANCH_PREFIX` env > built-in `"burrow"` (warren-9993; the legacy default preserves backward compatibility). The warren `run_xxx` suffix makes the branch back-reference the warren run row on `git log` / PR review without a separate lookup.
 3. **Seed the burrow** — `buildSeedFiles(agent)` returns an `HttpWorkspaceFile[]` covering the five workspace drops (`.canopy/agent.json`, `.mulch/expertise/<domain>.jsonl` from `expertise_seed`, `.seeds/workflow.txt`, `.pi/skills/<name>/SKILL.md` from `pi_skills`, `.pi/prompts/<name>.md` from `pi_prompts`). The list rides along on the step-2 `POST /burrows` as `seed.files`, so provision-and-seed is a single atomic round-trip — burrow rolls the burrow back on its side if any file fails validation, and warren never observes a half-seeded workspace (R-07; see §11.A).
 4. **Dispatch** — `POST /burrows/:burrow_id/runs` with `{ agentId, prompt, metadata? }`. Burrow returns 201 + `Run` in `state='queued'`; its run loop picks it up. Warren records the burrow run id in `runs.burrow_run_id`.
 5. **Stream** — `GET /runs/:burrow_run_id/stream?follow=1` (NDJSON, chunked HTTP). Warren persists every event into its own `events` table (see §9) keyed by warren run id, then fans out to UI subscribers. UI clients hit warren's own `/runs/:id/events?follow=1`, which serves history from the warren log + tails the live stream concurrently. If warren restarts mid-run, on boot it re-subscribes to burrow's stream from `MAX(events.burrow_event_seq)+1` to backfill anything missed.
@@ -422,7 +422,7 @@ warren/
 │   │   ├── clone.ts            # git clone <url> → /data/projects/...
 │   │   └── repo.ts             # discovery, .seeds/.mulch/ presence checks
 │   ├── warren-config/          # per-project .warren/ loader (§11.H, R-02)
-│   │   ├── schema.ts           # zod: triggers.yaml + defaults.json
+│   │   ├── schema.ts           # zod: triggers.yaml + config.yaml + preview.yaml
 │   │   ├── load.ts             # missing-vs-malformed envelope, never throws
 │   │   ├── cache.ts            # per-project cache invalidated on refreshProject
 │   │   └── errors.ts           # WarrenConfigUnavailableError + per-file codes
@@ -716,56 +716,74 @@ After all five §11.E gaps were closed, a second end-to-end run against warren i
 
 Released as `0.1.2` after closing all six §11.F gaps; bumped `@os-eco/burrow-cli` to `0.2.7` in **both** `Dockerfile` and `package.json` + `bun.lock` to pull in the gitdir-bind fix (`burrow-7a80`: burrow's bwrap profile now binds the host worktree gitdir into the sandbox, so an agent at UID 1000 can resolve `<workspace>/.git → /<host-path>/.git/worktrees/<id>` and run `git commit` inside its workspace). Two runs against warren-on-warren produced the cleanest signal yet on the §4.3 composition flow. **Run 1 (`run_a98cfx1fantf`, prompt `"Work on sd warren-9f65. Use ml"`)** completed `succeeded` in 6m28s / 49 turns with `branchPushed: true` — and zero of the agent's work on the remote (`gh compare main...burrow/bur_r9mjn6da9xc9 → ahead_by: 0, total_commits: 0`). The branch ref pointed at main's SHA; warren reap pushed an unchanged HEAD because the agent never ran `git commit`. The thin canopy `claude-code` prompt (`canopy-daf3`: `"You are a helpful coding assistant. Be concise."`) contains no commit contract; combined with `src/runs/reap.ts:257-265` (push-without-commit) and the `branchPushed` boolean (which flips `true` on any successful push including a no-op) the result is a silent work-loss shape that even an attentive operator misreads as success — filed as `warren-f3bb` (P1: observability fix B + canopy-prompt fix C + SPEC §4.3.6 doc fix D). A secondary entanglement filed as `warren-fead` (the agent emitted `stop_reason=end_turn` while waiting on a foreground `bun install` Monitor — *"I'll wait for the monitor"* with no follow-up tool call ended the run before commit could happen). **Run 2 (`run_agpet4ev6e4a`, prompt `"...Commit and push when you're done"`)** produced the first warren-on-warren success that actually shipped: branch `burrow/bur_0qgh4pwpvgv0` at SHA `15339e61` with `ahead_by: 1`, real diff across 5 files (acceptance scenario 04 implementation + lib changes + mulch + seeds). The fix-C scope is validated — instructing the agent to commit is sufficient for the smoke-test agent. The *"and push"* portion was inert and counterproductive: agent-side `git push` failed four times with `fatal: could not read Username for 'https://github.com'` because warren's supervisor installs the `insteadOf` rewrite rule into `/root/.gitconfig` (`src/supervisor/git-credentials.ts:65-71`), but burrow's bwrap profile ro-binds `/usr`, `/etc`, `/lib`, `/lib64`, `/bin`, `/sbin`, `/opt` — *not* `/root`. Same architectural pattern as `warren-1eaa` (Bun store at `/root/.bun` invisible inside sandbox); the git config has the same problem and was not relocated. Filed as `warren-1a09` (P2): for V1, fix A (canopy prompt instructs commit only — *"warren handles the push"*) and fix D (SPEC documents the contract: agent commits, reap pushes, sandbox has no github auth path) are sufficient. Reap pushed the agent's commit successfully because reap runs host-side with `/root/.gitconfig` visible — the system did the right thing while the agent burned ~5 turns on doomed retries.
 
-### 11.H `.warren/` directory convention (2026-05-10)
+### 11.H `.warren/` directory convention (2026-05-10, reorg 2026-05-14)
 
 R-02 from `ROADMAP.md` shipped via plan `pl-5d74` (warren-571f) before the
 V2 phase opens. Worth pinning in V1's frozen record because the warren ↔
 project-repo seam now has a third tier alongside `.canopy/` (prompts) and
-`.mulch/` (expertise).
+`.mulch/` (expertise). The `.warren/` YAML reorg (warren-5840) lands as a
+follow-up under pl-2c59; this section captures the post-reorg layout with
+the legacy file documented as the loader fallback.
 
-**Layout.** Each project repo may contain a `.warren/` directory with up
-to three optional files:
+**Layout (warren-5840).** Each project repo may contain a `.warren/`
+directory with these optional files:
 
 ```
 .warren/
   triggers.yaml      # array of trigger entries (cron today; webhooks future)
-  defaults.json      # per-project default role / branch / prompt / preview
+  config.yaml        # per-project default role / branch / prompt / runBranchPrefix
+  preview.yaml       # per-run preview environment (R-19 / §11.L) — top-level
+                     # document is the preview block itself
   pr-template.md     # per-fragment PR-body overrides (warren-bd49)
+  defaults.json      # DEPRECATED: legacy JSON home for everything in
+                     # config.yaml / preview.yaml; loader still reads it
+                     # and emits a deprecation warning (warren-5840)
 ```
 
-All three files are optional; the loader's envelope returns `null` for
-missing files instead of erroring (`mx-66d478`), so existing project
-repos keep working unchanged.
+All files are optional; the loader's envelope returns `null` for missing
+files instead of erroring (`mx-66d478`), so existing project repos keep
+working unchanged.
 
-**Format choice.** `triggers.yaml` is YAML (cron expressions read better;
-arrays-of-objects are noisier in TOML/JSON). `defaults.json` is JSON despite
-the original ROADMAP sketch saying YAML — the file is small, structurally
-flat, and matches the rest of os-eco's JSON wire surface. Format choice
-recorded as `mx-2cefdd`; YAML parser is `js-yaml ^4.1.1` to match mulch +
-overstory (`mx-8b6896`).
+**Format choice.** YAML across the board (warren-5840) so comments are
+allowed (JSON's biggest weakness) and arrays-of-objects stay readable as
+new blocks accumulate. The pre-reorg JSON choice (`mx-2cefdd`) is
+superseded by the warren-5840 decision; both formats keep working until
+projects migrate via `warren config migrate`. YAML parser is `js-yaml
+^4.1.1` to match mulch + overstory (`mx-8b6896`).
 
 **Schema.** `triggers.yaml` is `Array<Trigger>` with a `kind:` discriminator
 (only `'cron'` is implemented today; `kind:` exists so future webhook
 entries can land without a breaking schema rev — `mx-3636de`). Cron-token
 validation is intentionally loose (5 or 6 whitespace-separated fields,
 non-empty); R-06 owns full grammar checking when it wires in croner
-(`mx-40fe51`). `defaults.json` is `{ defaultRole?, defaultBranch?,
-defaultPrompt?, defaultProvider?, defaultModel?, runBranchPrefix? }` — all
-optional, all strict. `runBranchPrefix` (warren-9993) overrides the prefix
-warren composes the burrow branch from (`${prefix}/${run.id}`); precedence
-project default > `WARREN_RUN_BRANCH_PREFIX` env > built-in `"burrow"`.
+(`mx-40fe51`). `config.yaml` and legacy `defaults.json` share the same
+schema — `{ defaultRole?, defaultBranch?, defaultPrompt?, defaultProvider?,
+defaultModel?, runBranchPrefix?, preview? }` — all optional, all strict.
+`runBranchPrefix` (warren-9993) overrides the prefix warren composes the
+burrow branch from (`${prefix}/${run.id}`); precedence project default >
+`WARREN_RUN_BRANCH_PREFIX` env > built-in `"burrow"`. `preview.yaml` (when
+present) carries the preview block at the top level and wins over any
+nested `preview:` field — see `PreviewConfigSchema` in §11.L.
 
 **Loader contract** (`src/warren-config/load.ts`):
 
 - Returns `LoadedWarrenConfig = { triggers: TriggersConfig | null,
   defaults: DefaultsConfig | null, prTemplate: PrTemplateOverrides | null,
-  errors: WarrenConfigFileError[] }`.
+  errors: WarrenConfigFileError[], warnings: WarrenConfigFileError[] }`.
 - Missing file → entry is `null`, no error.
 - Present-but-malformed file → entry is `null`, error appended with code
-  (`yaml_parse | json_parse | schema_invalid`) and message.
+  (`warren_config_parse_error | warren_config_schema_error`) and message.
 - `pr-template.md` (warren-bd49) is loaded the same way: missing → `null`;
   unknown fragment names / unbalanced preview markers surface as
   `schemaError` entries that flow through doctor + readyz.
+- **Defaults precedence (warren-5840):** `.warren/config.yaml` >
+  `.warren/defaults.json` (legacy). When the legacy file is present the
+  loader appends a `warnings[]` entry with code `warren_config_deprecated`
+  pointing at `warren config migrate`; this never flips `errors[]`.
+- **Preview precedence (warren-5840):** `.warren/preview.yaml` > nested
+  `preview:` field on the resolved defaults envelope. The loader merges
+  `preview.yaml` into `defaults.preview` so downstream consumers keep
+  reading `defaults?.preview` regardless of which file the value came from.
 - Per-project cache (`src/warren-config/cache.ts`) is invalidated inside
   `refreshProject` and `deleteProject` (`mx-61c0e6`) so the next request
   reparses; this avoids the stale-config race called out in pl-5d74 risk #4.
@@ -781,10 +799,17 @@ doesn't exist; `WarrenConfigUnavailableError` joins the existing
 key/value, per-file errors. Read-only in V1 — editing the YAML/JSON is a
 git operation; warren only surfaces the parsed view (`mx-a5e30e`).
 
-**Diagnostics.** `warren doctor` and `/readyz` emit a `warren_config` check
-that walks every loaded project and aggregates `errors[]` into a single
-diagnostic row (`mx-f37c30`). Doctor's check ordering is now eight entries
-(`mx-1a70ef`); the eighth slot is `warren_config`.
+**Diagnostics.** `warren doctor` and `/readyz` emit two .warren/ checks:
+
+- `warren_config` aggregates fatal `errors[]` (parse / schema) into a
+  single failing-on-any-error row (`mx-f37c30`).
+- `warren_config_deprecations` (warren-5840) aggregates non-fatal
+  `warnings[]` — today only the `defaults.json` deprecation — and stays
+  `ok: true` regardless so a legacy install doesn't flip doctor red.
+  The check's hint names the one-shot fix: `warren config migrate`.
+
+Doctor's check ordering now includes both rows; existing acceptance
+scenarios continue to look for `warren_config` specifically.
 
 **Acceptance.** Scenario 14 (`scripts/acceptance/scenarios/14-warren-config.ts`)
 exercises absent / valid / malformed against `/readyz` rather than spawning
@@ -1138,9 +1163,12 @@ Linux path exercises the full warren↔burrow seam; macOS skips per
 namespace the same way.
 
 **Project opt-in shape.** A project drops a `preview` block into
-`.warren/defaults.json` (or, post-reorg, `.warren/preview.yaml`). The
-schema carries a `type` discriminator from day one so we don't have to
-break the config when the static-mode fallback lands:
+`.warren/preview.yaml` (canonical, warren-5840) — the top-level
+document is the block itself. The same block is still accepted nested
+under `preview:` in `.warren/config.yaml` or legacy `.warren/defaults.json`
+for projects still on the old layout. The schema carries a `type`
+discriminator from day one so we don't have to break the config when
+the static-mode fallback lands:
 
     preview:
       type: server          # 'server' ships in V1; 'static' is a follow-up
@@ -1294,12 +1322,12 @@ backends (SQLite default + `WARREN_TEST_DIALECT=postgres`) — preview
 state, port allocator persistence, and eviction queries all touch the
 DB seam that R-13 dual-tracks.
 
-**`.warren/` reorg deferred.** The single-file `defaults.json` works
-for V1 of R-19. The broader move toward a clean, human-friendly
-`.warren/` directory (one file per concern: `config.yaml` for global
-defaults, `preview.yaml`, `triggers.yaml`, `pr-template.md`) is filed
-as a follow-up under the same plan with a backcompat path so existing
-`defaults.json` installs don't break.
+**`.warren/` reorg.** Shipped as warren-5840 under pl-2c59. The
+canonical layout is one file per concern (`config.yaml`, `preview.yaml`,
+`triggers.yaml`, `pr-template.md`); the legacy `defaults.json` still
+loads with a deprecation warning, and `warren config migrate` converts
+an existing install in place. See §11.H for the loader precedence and
+`.warren/MIGRATION.md` for before/after examples.
 
 ### 11.M PR-body template (warren-bd49, 2026-05-14)
 

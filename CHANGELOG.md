@@ -11,7 +11,8 @@ R-19 (per-run preview environments) ships. Plan `pl-2c59` closed all
 11 implementation steps on top of the SPEC §11.L design lock.
 Operators set `WARREN_PREVIEW_HOST=preview.<your-host>` and point a
 wildcard CNAME at warren; projects opt in by adding a `preview` block
-to `.warren/defaults.json`. Reap's 5th best-effort sub-step launches
+to `.warren/preview.yaml` (or the legacy nested `preview:` field in
+`.warren/config.yaml` / `defaults.json`). Reap's 5th best-effort sub-step launches
 `preview.command` as a burrow sidecar in the same workspace, allocates
 a port from the SQLite-backed `WARREN_PREVIEW_PORT_RANGE`, and waits
 for readiness; a 6th sub-step patches the PR body's
@@ -26,6 +27,24 @@ secret. RunDetail UI surfaces a status badge, an "Open ↗" link, the
 failure tail when applicable, and a manual teardown button.
 
 ### Added
+
+- **`feat(config)`** — `.warren/` YAML reorg + `warren config migrate`
+  (warren-5840, follow-up under `pl-2c59`). The canonical layout is now
+  one file per concern: `triggers.yaml`, `config.yaml` (global defaults),
+  `preview.yaml` (hoisted from the legacy `preview:` block in defaults),
+  and `pr-template.md`. The loader prefers per-concern YAML files, falls
+  back to `config.yaml`, then falls back to `.warren/defaults.json`
+  while appending a non-fatal `warnings[]` entry with code
+  `warren_config_deprecated`. `warren init` scaffolds the YAML layout
+  directly. `warren config migrate [--cwd PATH | --project ID]` reads
+  the legacy `defaults.json`, hoists any `preview` block into
+  `preview.yaml`, writes the rest to `config.yaml`, and deletes the
+  legacy file in place. `warren doctor` / `/readyz` add a
+  `warren_config_deprecations` informational check that names the
+  offending file and the one-shot migration command without flipping
+  red. `GET /projects/:id/warren-config` surfaces the new `warnings`
+  field alongside the existing `errors`. `.warren/MIGRATION.md` ships
+  with field-by-field before/after examples.
 
 - **`feat(preview)`** — per-run preview environments (R-19, `pl-2c59`).
   Migration `0009_*.sql` adds five columns to `runs` (`preview_state`,

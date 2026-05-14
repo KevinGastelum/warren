@@ -223,7 +223,8 @@ export interface ApiErrorEnvelope {
 
 export type WarrenConfigFileErrorCode =
 	| "warren_config_parse_error"
-	| "warren_config_schema_error";
+	| "warren_config_schema_error"
+	| "warren_config_deprecated";
 
 export interface WarrenConfigFileError {
 	/** Project-relative path, e.g. `.warren/triggers.yaml`. */
@@ -276,6 +277,12 @@ export interface WarrenConfigResponse {
 	defaults: DefaultsConfig | null;
 	/** Per-file failures collected during this load. Empty on full success. */
 	errors: WarrenConfigFileError[];
+	/**
+	 * Non-fatal advisories (warren-5840) — e.g. `defaults.json` deprecation.
+	 * Surfaced separately from `errors` so the UI / doctor can render them
+	 * as informational instead of failures.
+	 */
+	warnings: WarrenConfigFileError[];
 }
 
 /* ----------------------------------------------------------------------- */

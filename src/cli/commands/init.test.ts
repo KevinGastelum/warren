@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import yaml from "js-yaml";
@@ -8,7 +8,7 @@ import { openDatabase, type WarrenDb } from "../../db/client.ts";
 import { AgentsRepo } from "../../db/repos/agents.ts";
 import { ProjectsRepo } from "../../db/repos/projects.ts";
 import { seedBuiltinAgents } from "../../registry/builtins/index.ts";
-import { parseDefaultsConfig, parseTriggersConfig } from "../../warren-config/schema.ts";
+import { parseConfigFile, parseTriggersConfig } from "../../warren-config/schema.ts";
 import type { CliContext } from "../output.ts";
 import { runInit } from "./init.ts";
 
@@ -47,7 +47,7 @@ describe("runInit (--cwd mode)", () => {
 		await rm(tmp, { recursive: true, force: true });
 	});
 
-	test("scaffolds parseable triggers.yaml + defaults.json (round-trip)", async () => {
+	test("scaffolds parseable triggers.yaml + config.yaml (round-trip)", async () => {
 		// One agent registered → auto-fills defaultRole.
 		await agents.upsert({ name: "claude-code", renderedJson: {} });
 		const { context, out } = captureContext();
@@ -56,17 +56,17 @@ describe("runInit (--cwd mode)", () => {
 		const stdout = JSON.parse(out.join(""));
 		expect(stdout.ok).toBe(true);
 		expect(stdout.scaffolded.defaultRole).toBe("claude-code");
-		expect(stdout.scaffolded.files).toEqual([".warren/triggers.yaml", ".warren/defaults.json"]);
+		expect(stdout.scaffolded.files).toEqual([".warren/triggers.yaml", ".warren/config.yaml"]);
 
 		const triggersRaw = await readFile(join(tmp, ".warren/triggers.yaml"), "utf8");
 		const triggersParsed = parseTriggersConfig(yaml.load(triggersRaw));
 		expect(triggersParsed.ok).toBe(true);
 		if (triggersParsed.ok) expect(triggersParsed.value).toEqual([]);
 
-		const defaultsRaw = await readFile(join(tmp, ".warren/defaults.json"), "utf8");
-		const defaultsParsed = parseDefaultsConfig(JSON.parse(defaultsRaw));
-		expect(defaultsParsed.ok).toBe(true);
-		if (defaultsParsed.ok) expect(defaultsParsed.value).toEqual({ defaultRole: "claude-code" });
+		const configRaw = await readFile(join(tmp, ".warren/config.yaml"), "utf8");
+		const configParsed = parseConfigFile(yaml.load(configRaw));
+		expect(configParsed.ok).toBe(true);
+		if (configParsed.ok) expect(configParsed.value).toEqual({ defaultRole: "claude-code" });
 	});
 
 	test("omits defaultRole when multiple agents are registered", async () => {
@@ -75,8 +75,10 @@ describe("runInit (--cwd mode)", () => {
 		const { context, out } = captureContext();
 		const result = await runInit(context, { projects, agents }, { mode: "cwd", cwd: tmp });
 		expect(result.exitCode).toBe(0);
-		const defaultsRaw = await readFile(join(tmp, ".warren/defaults.json"), "utf8");
-		expect(JSON.parse(defaultsRaw)).toEqual({});
+		const configRaw = await readFile(join(tmp, ".warren/config.yaml"), "utf8");
+		// Empty config renders as a YAML flow-style empty mapping `{}` so the
+		// file round-trips back through the schema to an empty DefaultsConfig.
+		expect(yaml.load(configRaw)).toEqual({});
 		expect(JSON.parse(out.join("")).scaffolded.defaultRole).toBeNull();
 	});
 
@@ -89,8 +91,10 @@ describe("runInit (--cwd mode)", () => {
 			{ mode: "cwd", cwd: tmp, defaultRole: "sapling" },
 		);
 		expect(result.exitCode).toBe(0);
-		const defaults = JSON.parse(await readFile(join(tmp, ".warren/defaults.json"), "utf8"));
-		expect(defaults.defaultRole).toBe("sapling");
+		const config = yaml.load(await readFile(join(tmp, ".warren/config.yaml"), "utf8")) as {
+			defaultRole?: string;
+		};
+		expect(config.defaultRole).toBe("sapling");
 	});
 
 	test("rejects an unknown --default-role with exit 2", async () => {
@@ -114,6 +118,16 @@ describe("runInit (--cwd mode)", () => {
 		expect(err2.join("")).toContain("refusing to overwrite");
 		// First run shouldn't have written errors.
 		expect(err.join("")).toBe("");
+	});
+
+	test("refuses to scaffold over legacy .warren/defaults.json", async () => {
+		await mkdir(join(tmp, ".warren"), { recursive: true });
+		await writeFile(join(tmp, ".warren/defaults.json"), JSON.stringify({ defaultBranch: "main" }));
+		const { context, err } = captureContext();
+		const result = await runInit(context, { projects, agents }, { mode: "cwd", cwd: tmp });
+		expect(result.exitCode).toBe(2);
+		expect(err.join("")).toContain("warren config migrate");
+		expect(existsSync(join(tmp, ".warren/config.yaml"))).toBe(false);
 	});
 
 	test("rejects a non-existent --cwd path with exit 2", async () => {
@@ -161,7 +175,7 @@ describe("runInit (--project mode)", () => {
 		);
 		expect(result.exitCode).toBe(0);
 		expect(existsSync(join(tmp, ".warren/triggers.yaml"))).toBe(true);
-		expect(existsSync(join(tmp, ".warren/defaults.json"))).toBe(true);
+		expect(existsSync(join(tmp, ".warren/config.yaml"))).toBe(true);
 	});
 
 	test("rejects an unknown project id with exit 1", async () => {

@@ -19,6 +19,7 @@ import { loadProjectsConfigFromEnv } from "../projects/config.ts";
 import { seedBuiltinAgents } from "../registry/builtins/index.ts";
 import { requireCanopyRegistryConfigFromEnv } from "../registry/config.ts";
 import { runAddProject } from "./commands/add-project.ts";
+import { runConfigMigrate } from "./commands/config-migrate.ts";
 import { runMigrateToPostgres } from "./commands/db.ts";
 import { runDoctor } from "./commands/doctor.ts";
 import { runInit } from "./commands/init.ts";
@@ -144,7 +145,7 @@ export function buildProgram(context: CliContext): Command {
 
 	program
 		.command("init")
-		.description("scaffold a .warren/ directory (triggers.yaml + defaults.json) in a project repo")
+		.description("scaffold a .warren/ directory (triggers.yaml + config.yaml) in a project repo")
 		.option("--project <id>", "target a registered project by id (writes into its warren clone)")
 		.option("--cwd <path>", "target a directory on disk (defaults to process.cwd())")
 		.option("--default-role <name>", "pin defaults.defaultRole to this registered agent")
@@ -172,6 +173,34 @@ export function buildProgram(context: CliContext): Command {
 					{ projects: repos.projects, agents: repos.agents },
 					args,
 				);
+				return result.exitCode;
+			});
+			process.exit(exitCode);
+		});
+
+	// `config` is a subcommand group rather than a flat top-level so future
+	// .warren/ admin tools (validate, dump, edit) can land alongside without
+	// inflating warren's first-page help. Today it has one child:
+	// `migrate` (warren-5840 — defaults.json → config.yaml + preview.yaml).
+	const configGroup = program.command("config").description(".warren/ admin tools");
+	configGroup
+		.command("migrate")
+		.description(
+			"convert legacy .warren/defaults.json into the warren-5840 YAML layout (config.yaml + preview.yaml)",
+		)
+		.option("--project <id>", "target a registered project by id (writes into its warren clone)")
+		.option("--cwd <path>", "target a directory on disk (defaults to process.cwd())")
+		.action(async (opts: { project?: string; cwd?: string }) => {
+			if (opts.project !== undefined && opts.cwd !== undefined) {
+				context.stdio.stderr.write("warren: --project and --cwd are mutually exclusive\n");
+				process.exit(2);
+			}
+			const exitCode = await withCliDb({ env: context.env }, async ({ repos }) => {
+				const args =
+					opts.project !== undefined
+						? { mode: "project" as const, projectId: opts.project }
+						: { mode: "cwd" as const, cwd: opts.cwd ?? process.cwd() };
+				const result = await runConfigMigrate(context, { projects: repos.projects }, args);
 				return result.exitCode;
 			});
 			process.exit(exitCode);

@@ -47,6 +47,7 @@ import {
 	checkPreviewMaxLive,
 	checkPreviewPortAllocator,
 	checkWarrenConfig,
+	checkWarrenConfigDeprecations,
 	type DiagnosticCheck,
 } from "../diagnostics/checks.ts";
 import { createRunPreviewsRepo, DEFAULT_MAX_LIVE } from "../preview/eviction.ts";
@@ -286,6 +287,7 @@ function getProjectWarrenConfigHandler(deps: ServerDeps): RouteHandler {
 			triggers: loaded.triggers,
 			defaults: loaded.defaults,
 			errors: loaded.errors,
+			warnings: loaded.warnings,
 		});
 	};
 }
@@ -998,15 +1000,16 @@ function readyz(deps: ServerDeps): RouteHandler {
 		checks.push(checkCanopyClone({ env }));
 		checks.push(await checkCanopyClean({ env, spawn }));
 		checks.push(await checkBwrap({ spawn }));
-		checks.push(
-			await checkWarrenConfig({
-				projects: (await deps.repos.projects.listAll()).map((p) => ({
-					id: p.id,
-					localPath: p.localPath,
-				})),
-				...(deps.warrenConfigs !== undefined ? { cache: deps.warrenConfigs } : {}),
-			}),
-		);
+		const warrenConfigProjects = (await deps.repos.projects.listAll()).map((p) => ({
+			id: p.id,
+			localPath: p.localPath,
+		}));
+		const warrenConfigArgs = {
+			projects: warrenConfigProjects,
+			...(deps.warrenConfigs !== undefined ? { cache: deps.warrenConfigs } : {}),
+		};
+		checks.push(await checkWarrenConfig(warrenConfigArgs));
+		checks.push(await checkWarrenConfigDeprecations(warrenConfigArgs));
 		checks.push(await previewPortAllocatorReadyzCheck(deps));
 		checks.push(await previewMaxLiveReadyzCheck(deps));
 		// Auth-strength probe (R-19 / SPEC §11.L, warren-8a10) reads from

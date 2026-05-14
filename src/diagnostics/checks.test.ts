@@ -12,6 +12,7 @@ import {
 	checkPreviewMaxLive,
 	checkPreviewPortAllocator,
 	checkWarrenConfig,
+	checkWarrenConfigDeprecations,
 	checkWarrenDb,
 } from "./checks.ts";
 
@@ -179,12 +180,14 @@ describe("checkWarrenConfig", () => {
 		defaults: null,
 		prTemplate: null,
 		errors: [],
+		warnings: [],
 	};
 	const valid: LoadedWarrenConfig = {
 		triggers: [],
 		defaults: { defaultBranch: "main" },
 		prTemplate: null,
 		errors: [],
+		warnings: [],
 	};
 
 	test("ok with informational message when no projects registered", async () => {
@@ -223,6 +226,7 @@ describe("checkWarrenConfig", () => {
 					message: "YAML parse error: bad indent",
 				},
 			],
+			warnings: [],
 		};
 		const result = await checkWarrenConfig({
 			projects: [
@@ -261,6 +265,7 @@ describe("checkWarrenConfig", () => {
 					message: "branch: required",
 				},
 			],
+			warnings: [],
 		};
 		const result = await checkWarrenConfig({
 			projects: [
@@ -293,6 +298,98 @@ describe("checkWarrenConfig", () => {
 		});
 		expect(seen).toEqual([{ id: "prj_a", path: "/c/a" }]);
 		expect(result.ok).toBe(true);
+	});
+
+	test("warnings on a loaded envelope do not flip warren_config to ok=false", async () => {
+		const withWarning: LoadedWarrenConfig = {
+			triggers: null,
+			defaults: { defaultBranch: "main" },
+			prTemplate: null,
+			errors: [],
+			warnings: [
+				{
+					file: ".warren/defaults.json",
+					code: "warren_config_deprecated",
+					message: "deprecated",
+				},
+			],
+		};
+		const result = await checkWarrenConfig({
+			projects: [{ id: "prj_a", localPath: "/c/a" }],
+			load: async () => withWarning,
+		});
+		expect(result.ok).toBe(true);
+	});
+});
+
+describe("checkWarrenConfigDeprecations", () => {
+	const clean: LoadedWarrenConfig = {
+		triggers: null,
+		defaults: null,
+		prTemplate: null,
+		errors: [],
+		warnings: [],
+	};
+	const deprecated: LoadedWarrenConfig = {
+		triggers: null,
+		defaults: { defaultBranch: "main" },
+		prTemplate: null,
+		errors: [],
+		warnings: [
+			{
+				file: ".warren/defaults.json",
+				code: "warren_config_deprecated",
+				message: "run `warren config migrate`",
+			},
+		],
+	};
+
+	test("ok with informational message when no projects registered", async () => {
+		const result = await checkWarrenConfigDeprecations({ projects: [] });
+		expect(result.name).toBe("warren_config_deprecations");
+		expect(result.ok).toBe(true);
+		expect(result.message).toContain("no projects registered");
+	});
+
+	test("ok with 'no deprecations' message when every project is clean", async () => {
+		const result = await checkWarrenConfigDeprecations({
+			projects: [{ id: "p1", localPath: "/c/p1" }],
+			load: async () => clean,
+		});
+		expect(result.ok).toBe(true);
+		expect(result.message).toContain("no .warren/ deprecations");
+	});
+
+	test("ok=true but message names offending projects + files when warnings present", async () => {
+		const result = await checkWarrenConfigDeprecations({
+			projects: [
+				{ id: "p1", localPath: "/c/p1" },
+				{ id: "p2", localPath: "/c/p2" },
+			],
+			load: async (path) => (path === "/c/p1" ? deprecated : clean),
+		});
+		expect(result.ok).toBe(true);
+		expect(result.message).toContain("p1 .warren/defaults.json");
+		expect(result.message).toContain("warren config migrate");
+		expect(result.hint).toContain("warren config migrate");
+	});
+
+	test("skips projects whose load threw — those are surfaced by checkWarrenConfig", async () => {
+		const result = await checkWarrenConfigDeprecations({
+			projects: [
+				{ id: "p_gone", localPath: "/c/missing" },
+				{ id: "p_deprecated", localPath: "/c/dep" },
+			],
+			load: async (path) => {
+				if (path === "/c/missing") {
+					throw new WarrenConfigUnavailableError("clone gone");
+				}
+				return deprecated;
+			},
+		});
+		expect(result.ok).toBe(true);
+		expect(result.message).toContain("p_deprecated .warren/defaults.json");
+		expect(result.message).not.toContain("p_gone");
 	});
 });
 
