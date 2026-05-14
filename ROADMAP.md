@@ -1193,10 +1193,12 @@ deploy; GitHub App mode activates when `WARREN_GITHUB_APP_ID` +
 ---
 
 ## R-19 — Per-run preview environments
-Status: [proposed] — needs more sketching before commit
-Depends on: burrow-side inbound networking policy (not yet filed; today
-burrow's bwrap profiles bind for outbound only). Plays well with R-12
-(remote workers) but doesn't require it.
+Status: [in flight] — plan `pl-2c59` (root seed `warren-1bcb`); design
+lock landed 2026-05-14 in SPEC §11.L.
+Depends on: burrow-side inbound networking policy (filed as the
+cross-repo coordination seed under `pl-2c59` step 2). Plays well with
+R-12 (remote workers) but doesn't require it — proxy preamble returns
+501 for non-local workers with an explicit R-12 deferral message.
 Unlocks: runs feel real — "here's the agent's branch, here's the diff,
 **and here's the working app at this URL**" instead of just a diff in
 the UI. Removes the "I'd need to check this out locally to see if it
@@ -1248,61 +1250,53 @@ workspace's listening port. Roughly:
    and exposes the URL in the UI as a clickable link with a status
    badge.
 
-**Open questions (the part that needs sketching).**
+**Decisions locked in SPEC §11.L (2026-05-14 design pass).**
 
-- **Same sandbox or forked?** Running `bun run dev` inside the same
-  bwrap that the agent just ran in is simpler (one workspace, one
-  filesystem, one process tree) but means the preview shares whatever
-  state the agent left behind, including any malicious side effects.
-  Forking a fresh sandbox from the agent's final commit is safer but
-  doubles the burrow workload and complicates port binding. Default
-  to "same sandbox" for the initial spec and document the tradeoff?
-- **Auth on the preview URL.** A run against private code produces a
-  preview containing whatever the agent built — possibly with secrets,
-  possibly with the org's UI. Options: (a) the same bearer token that
-  fronts warren, transferred via signed cookie; (b) GitHub OAuth (if
-  R-18 ships); (c) basic auth with a per-run password surfaced in the
-  reap summary; (d) no auth, opt-in per project. We should not ship
-  (d) as the default.
-- **Inbound burrow networking.** Burrow's bwrap profiles bind for
-  outbound only today. Adding inbound means a per-burrow port-forward
-  on the host loopback (`127.0.0.1:<random-port>` → burrow's port
-  3000). This is the same architectural change as the
-  `.gitconfig`-mount / per-run secret mount discussed in R-15 and
-  §11.G — coordinate the seam.
-- **Port allocation.** Static range (`30000-31000`)? Dynamic from the
-  ephemeral range? Need a small allocator in warren that survives
-  restarts (persist to `runs.preview_port`).
-- **Resource ceiling.** A long-lived `bun run dev` per recent run can
-  exhaust memory fast. Need an LRU eviction policy that supersedes
-  the per-preview TTL (e.g., "max 20 live previews, evict oldest").
-  Pairs naturally with R-17 (cost & concurrency guardrails) but
-  shouldn't *require* R-17 to ship a useful V2.
-- **Remote workers (R-12) interaction.** If the burrow is on a
-  different host than warren, the host-side proxy needs to route
-  cross-machine. Wireguard mesh between warren and workers? Public
-  IP per worker + signed-URL routing? Push to R-12's protocol
-  discussions before locking the design.
-- **Custom domain per project.** Some projects will want
-  `<project>.example.com/runs/<id>/` instead of
-  `run-<id>.<warren-host>`. Defer to V2-of-this-item; ship the
-  `run-<id>` form first.
-- **Non-HTTP previews.** Lots of agent output is not a web server —
-  a CLI tool, a generated PDF, a video render, a static-site bundle.
-  Static-site fallback (preview command produces a directory, warren
-  serves it through the same proxy) is a near-free addition once
-  the routing layer exists; non-HTTP "preview as downloadable
-  artifact" is a separate problem and likely out of scope here.
-- **Failure UX.** If `preview.command` fails to bind or never passes
-  `readiness_path`, the run is still successful — the agent did its
-  work — but the preview is broken. Surface `preview_state: failed`
-  with the last 200 lines of stdout/stderr; don't fail the run.
+- **Same sandbox, not a fork.** Forking doubles burrow workload for
+  marginal safety; the agent's side effects are accepted as the cost of
+  realness. Failure surfaces as `preview_state: failed` with the
+  stderr tail in `preview_failure_message`.
+- **Auth = signed cookie** issued from `GET /runs/:id/preview/login?token=…`.
+  Bearer-in-header is impossible for a browser hitting `run-<id>.<host>`.
+  GitHub OAuth defers to R-18; per-run basic-auth and no-auth rejected.
+- **Inbound burrow networking** filed as a cross-repo coordination seed
+  under `pl-2c59` step 2 (`warren-83dc` → burrow-side seed).
+  Per-burrow loopback port-forward, same architectural seam as the
+  `.gitconfig`-mount / per-run secret mount in R-15 and §11.G.
+- **Port allocation.** SQLite-backed allocator, in-use ports derived
+  from `runs.preview_state IN ('starting','live')` on startup so the
+  allocator is restart-safe. Default range `30000-31000`, configurable.
+- **Lifecycle.** Idle TTL is the primary kill-rule (default 30 min, set
+  by proxy-tracked `preview_last_hit_at`); hard `max_lifetime` ceiling
+  (default 8h) bounds worst case; global LRU at `WARREN_PREVIEW_MAX_LIVE`
+  (default 20) bounds memory; manual teardown button is polite recourse.
+  Wall-clock-only TTL rejected — yanks reviewers mid-session.
+- **Remote workers (R-12).** Explicitly deferred. Proxy preamble asserts
+  local-worker-only and returns 501 with an R-12 deferral message;
+  acceptance scenario 19 covers the assertion.
+- **Custom domain per project.** Deferred to V2-of-this-item; ship the
+  `run-<id>.<warren-host>` form first.
+- **Static-site fallback.** Schema carries a `type: server | static`
+  discriminator from day one so we don't break the config later;
+  `server` ships in V1, `static` is filed as a follow-up under the same
+  plan.
+- **Failure UX.** `preview_state: failed` with stderr tail; never fails
+  the run. PR body gets a `<!-- warren:preview-placeholder -->` line at
+  open time; a separate best-effort `pr_annotate_preview` sub-step
+  patches the placeholder once the preview is live or failed. PR open
+  does **not** block on preview ready.
+- **PR-template configurability.** Filed as a sibling seed under
+  `pl-2c59` — warrants more than a footer in the existing hardcoded
+  body. R-19 only locks the `preview_url_or_placeholder` fragment
+  contract; the broader template system is the sibling seed's job.
+- **`.warren/` reorg.** Single `defaults.json` works for V1 of R-19;
+  the move to one-file-per-concern YAML is a follow-up seed under the
+  same plan, with backcompat from `defaults.json`.
 
-**Why this is filed as needs-sketching rather than implementable.** The
-sketch above touches burrow's network policy, warren's proxy story,
-TLS/DNS operator burden, auth, lifecycle, and the remote-worker future.
-A real design doc should land before any code — probably a §11.K
-addition to SPEC.md plus a burrow-side issue for inbound networking.
+See SPEC §11.L for the full contract (schema, migration, sub-step
+ordering, auth scope, allocator semantics). Implementation steps live
+under plan `pl-2c59`; each step's child seed is sized so it can be
+re-planned via `sd plan submit` when its turn arrives.
 
 ---
 
@@ -1542,10 +1536,10 @@ R-09 is repromoted and R-12 through R-18 are slotted in.
 
 **Wave 3 — perceived-realness (post-org-readiness, design-first).**
 
-19. **R-19** (per-run preview environments) — explicitly needs a
-    design pass before commit (SPEC §11.K + burrow inbound-networking
-    seed). High UX leverage — collapses "diff + checkout-locally to
-    verify" into "click the URL" — but the design surface spans burrow
-    network policy, TLS/DNS, auth, lifecycle, and the R-12 remote-worker
-    future. Sketch first; sequence after R-12's protocol stabilizes so
-    cross-host routing isn't a retrofit.
+19. **R-19** (per-run preview environments) — in flight as plan
+    `pl-2c59`. Design lock landed 2026-05-14 in SPEC §11.L; the
+    cross-repo burrow inbound-networking seed (`warren-83dc`) is on the
+    critical path. Cross-host routing (R-12) explicitly deferred — proxy
+    preamble returns 501 with an R-12 deferral message for non-local
+    workers and acceptance scenario 19 asserts it. High UX leverage:
+    collapses "diff + checkout-locally to verify" into "click the URL."

@@ -1088,6 +1088,176 @@ five places update in lockstep: (1) `src/registry/builtins/<name>.ts`,
 `02-agents-refresh.ts` already filters on `source !== 'builtin'`
 (`mx-ae877e`), so it auto-extends without a code change.
 
+### 11.L Per-run preview environments (2026-05-14)
+
+Design lock for R-19. Tracked by plan `pl-2c59` (root seed
+`warren-1bcb`, design-lock step `warren-94d8`). Closes the R-19 open
+questions; the implementing steps assume this section as contract.
+
+**Project opt-in shape.** A project drops a `preview` block into
+`.warren/defaults.json` (or, post-reorg, `.warren/preview.yaml`). The
+schema carries a `type` discriminator from day one so we don't have to
+break the config when the static-mode fallback lands:
+
+    preview:
+      type: server          # 'server' ships in V1; 'static' is a follow-up
+      command: "bun run dev"
+      port: 3000
+      readiness_path: "/healthz"     # optional
+      idle_ttl: "30m"                # default WARREN_PREVIEW_IDLE_TTL
+      max_lifetime: "8h"             # default WARREN_PREVIEW_MAX_LIFETIME
+
+V1 implements only `type: server`. `type: static` (build step + dir to
+serve) is filed as a follow-up under the same plan; the schema accepts
+the field but the launcher rejects with a "not yet implemented" error
+that names the follow-up seed. Missing-block is not an error — projects
+that haven't opted in simply skip the preview sub-step at reap.
+
+**Reap-time launch (5th best-effort sub-step).** Mirrors the `pr_open`
+pattern (`mx-05abb2`): a new `preview_launch` sub-step runs in
+`src/runs/reap.ts` *after* `pr_open`, only when `outcome === 'succeeded'`
+and the project opted in, never fails the run. Sequencing matters:
+`pr_open` runs first and opens the PR with a
+`<!-- warren:preview-placeholder -->` line embedded in the body so the
+reviewer sees the PR immediately; `preview_launch` then asks burrow to
+spawn `preview.command` as a long-lived sidecar in the same workspace,
+allocates a port, and transitions `preview_state: starting → live` once
+`readiness_path` (or a default `GET /`) returns 2xx. Once the preview
+reaches `live` or `failed`, a third best-effort sub-step
+`pr_annotate_preview` issues a `PATCH /repos/.../pulls/:n` to replace
+the placeholder line with either the preview URL (live) or the failure
+tail (failed). PR open does **not** block on preview ready; the
+annotation patch is its own idempotent step. All three sub-steps emit
+`reap_failed` events with `step` ∈ {`pr_open`, `preview_launch`,
+`pr_annotate_preview`} on error and never mark the run failed.
+
+**Same sandbox, not a fork.** The preview runs in the same burrow
+workspace the agent used. Forking would double burrow workload and
+complicate port binding for marginal safety; the agent's side effects
+(deleted files, half-applied migrations) are accepted as the cost of
+realness. Failure mode surfaces as `preview_state: failed` with the
+stderr tail in `preview_failure_message` — reviewers read "agent broke
+the build" attributable to the agent's output, not warren.
+
+**Lifecycle — idle-TTL is the primary signal.** Wall-clock TTL is the
+wrong primary kill-rule: a reviewer mid-session shouldn't get their
+preview yanked because N hours elapsed. The eviction worker
+(`pl-2c59` step 7) combines four signals:
+
+1. **Idle TTL.** The proxy updates `runs.preview_last_hit_at` on each
+   request, **before** returning the response (a slow upstream must not
+   make the preview look idle). Updates are debounced to ~once per 30s
+   per run to keep the hot path cheap. Sweep evicts when
+   `now - preview_last_hit_at > idle_ttl` (default 30 min, overridable
+   per-project and via `WARREN_PREVIEW_IDLE_TTL`).
+2. **Max lifetime ceiling.** Hard cap from launch time regardless of
+   activity. Default 8h, overridable per-project and via
+   `WARREN_PREVIEW_MAX_LIFETIME`. Stops the "browser tab from yesterday
+   is still ticking the proxy" failure mode.
+3. **Global LRU cap.** When `WARREN_PREVIEW_MAX_LIVE` (default 20) is
+   reached and a new launch needs space, evict the longest-idle preview.
+   Bounds container memory regardless of TTL choices.
+4. **Manual teardown.** `POST /runs/:id/preview/teardown` is bearer-
+   required, idempotent, emits `preview_torn_down`. UI exposes a button
+   in `starting` / `live` states. Polite recourse when reviewer is done.
+
+All four eviction paths free the port and stop the sidecar process. The
+**burrow workspace stays** — only the preview process dies. Workspace
+cleanup is a separate concern keyed off the run's lifecycle, not the
+preview's, so a re-launch (e.g. if R-12 remote-worker future ever wants
+to re-spin a preview on a different host) is cheap.
+
+**Auth — signed cookie, not bearer.** A run against private code
+produces a preview that may contain secrets. Bearer-in-header is
+impossible for a browser hitting `run-<id>.<host>` directly, so warren
+issues a signed cookie from `GET /runs/:id/preview/login?token=…&redirect=…`
+(ROADMAP option a). Cookie scope is `Domain=.<warren-host>;
+Path=/; HttpOnly; Secure; SameSite=Lax`. The proxy preamble verifies
+the HMAC before forwarding; unauthenticated requests 401, not 502. A
+doctor check warns when `WARREN_PREVIEW_HOST` is set but
+`WARREN_API_TOKEN` is the default placeholder. GitHub OAuth (ROADMAP
+option b) defers to R-18; per-run basic-auth password (option c) and
+no-auth (option d) stay rejected.
+
+**Routing — in-process Bun route, not a separate reverse proxy.** The
+proxy match (`Host: run-<id>.<host>`) lives in `src/server/main.ts` as
+a preamble before the API/UI routes. It resolves `runs.preview_port` →
+`127.0.0.1:<port>` and forwards HTTP + WS through
+`burrowClientPool.clientFor({burrowId})` so the multi-worker placement
+(`warren-c0c9` / `pl-9ba1` step 5) keeps holding. Cross-host
+(`runs.worker_id !== local`) returns **501 with an explicit R-12
+deferral message** — silent fall-through to a closed loopback port
+would manifest as "preview works for some runs, not others."
+
+**TLS termination stays operator-side.** Per SPEC §8.1 / §11.D, TLS is
+the operator's Caddy / Fly edge. Warren ships docs for the wildcard
+`*.<warren-host>` CNAME + DNS-01 wildcard cert with a Caddy snippet,
+not built-in cert provisioning. The DEPLOY guide is honest about the
+operator burden (DNS provider must be on Caddy's DNS-01 list; some are
+paid).
+
+**Port allocator persistence.** The allocator is SQLite-backed, not in-
+memory. On warren startup, in-use ports are derived from
+`SELECT preview_port FROM runs WHERE preview_state IN ('starting','live')`.
+Default range `30000-31000`, configurable via
+`WARREN_PREVIEW_PORT_RANGE`. Exhaustion emits a `preview_failed` event
+with `reason='port_exhausted'`; a doctor warning fires when ≥80% of
+the range is in use.
+
+**Schema additions.** Migration 0009 adds five columns to `runs`.
+Per R-13's dual-backend story (§3.2, §6), the migration lands in
+**both** dialects in lockstep — `src/db/migrations/0009_*.sql` and
+`src/db/migrations/postgres/0009_*.sql` — and the column declarations
+land in **both** schema files (`src/db/schema/sqlite.ts` +
+`src/db/schema/postgres.ts`). The preview-state enum tuple
+(`['starting','live','failed','torn-down']`) lives in the shared
+`src/db/schema/columns.ts` module so TS-side narrowing stays
+dialect-agnostic.
+
+    preview_state              TEXT NULL    -- (sqlite) / TEXT NULL (postgres). Enum: starting|live|failed|torn-down
+    preview_port               INTEGER NULL -- (sqlite) / INTEGER NULL (postgres)
+    preview_started_at         TEXT NULL    -- (sqlite ISO8601) / TIMESTAMPTZ NULL (postgres)
+    preview_last_hit_at        TEXT NULL    -- (sqlite ISO8601) / TIMESTAMPTZ NULL (postgres); proxy-updated, debounced
+    preview_failure_message    TEXT NULL    -- stderr tail on failure
+
+`RunsRepo.attachPreview` is **async** (Promise-returning, matching the
+post-R-13 repo layer from `pl-f17e` step 1) and mirrors `attachStats`'s
+partial-input semantics (`mx-49272e`): omitted fields preserve existing
+values; explicit `null` does not clear. Migration-parity CI lint
+(R-13 acceptance #7) enforces lockstep on every commit.
+
+**PR-template fragment contract.** The preview footer is a **named
+template fragment** in the PR body that no-ops when the project hasn't
+opted in. Today `buildPrContent` (`src/runs/reap.ts:552`) hardcodes the
+body shape; the broader move to user-configurable PR-body templates is
+a sibling seed filed under the same plan
+(`.warren/pr-template.md`-driven, parallel to canopy's section system).
+R-19 only locks the fragment contract: a `preview_url_or_placeholder`
+fragment that renders either nothing, a placeholder comment, or the
+final URL, and is the integration point the broader PR-template seed
+will pluralize.
+
+**Remote-worker (R-12) explicit deferral.** Cross-host preview routing
+is out of scope. The proxy preamble asserts local-worker-only and
+returns 501 with a clear R-12 deferral message; acceptance scenario 20
+covers the assertion. When R-12 lands, this becomes the natural place
+to splice in the worker-aware routing layer.
+
+**Acceptance scenario number.** Scenario **20** (`20-preview.ts`), not
+19 — scenario 19 (`19-warren-on-postgres.ts`) is taken by the R-13
+dual-backend acceptance from `pl-f17e`. Per the dialect-aware `withDb()`
+helper landed in `pl-f17e` step 6, scenario 20 should run on both
+backends (SQLite default + `WARREN_TEST_DIALECT=postgres`) — preview
+state, port allocator persistence, and eviction queries all touch the
+DB seam that R-13 dual-tracks.
+
+**`.warren/` reorg deferred.** The single-file `defaults.json` works
+for V1 of R-19. The broader move toward a clean, human-friendly
+`.warren/` directory (one file per concern: `config.yaml` for global
+defaults, `preview.yaml`, `triggers.yaml`, `pr-template.md`) is filed
+as a follow-up under the same plan with a backcompat path so existing
+`defaults.json` installs don't break.
+
 ---
 
 ## 12. Relationship to other os-eco tools
