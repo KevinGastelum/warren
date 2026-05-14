@@ -42,6 +42,15 @@ export interface InProcBootOptions {
 	readonly extraEnv?: Record<string, string>;
 	/** Override the warren server entry; default `src/server/main.ts`. */
 	readonly serverEntry?: string;
+	/**
+	 * Override the WARREN_DB_URL contract (R-13). When set, the launcher
+	 * passes `WARREN_DB_URL=<dbUrl>` and omits the legacy `WARREN_DB_PATH`
+	 * so the server-config loader doesn't log a path↔url conflict warning.
+	 * Used by scenario 19 (warren-480a) to point a per-scenario warren at
+	 * an isolated Postgres database. Defaults to a sqlite file under
+	 * `${tmpRoot}/data/warren.db` (today's behavior).
+	 */
+	readonly dbUrl?: string;
 }
 
 export interface BootHandle {
@@ -121,12 +130,17 @@ export async function bootInProc(opts: InProcBootOptions): Promise<BootHandle> {
 	const bind = opts.bind ?? { host: "127.0.0.1", port: pickPort() };
 	const warrenUrl = `http://${bind.host}:${bind.port}`;
 
+	const useExplicitDbUrl = opts.dbUrl !== undefined && opts.dbUrl !== "";
 	const env: Record<string, string> = {
 		...filterEnv(process.env),
 		WARREN_API_TOKEN: opts.token,
 		WARREN_BIND_HOST: bind.host,
 		WARREN_BIND_PORT: String(bind.port),
-		WARREN_DB_PATH: dbPath,
+		// R-13 (warren-480a): when an explicit dbUrl is supplied (pg
+		// scenarios), pass WARREN_DB_URL and omit WARREN_DB_PATH so the
+		// loader doesn't fire its path↔url conflict warning. Otherwise
+		// preserve today's WARREN_DB_PATH-only contract.
+		...(useExplicitDbUrl ? { WARREN_DB_URL: opts.dbUrl as string } : { WARREN_DB_PATH: dbPath }),
 		WARREN_DATA_DIR: dataDir,
 		WARREN_CANOPY_DIR: canopyDir,
 		WARREN_PROJECTS_DIR: projectsDir,

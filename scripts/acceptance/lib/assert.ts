@@ -112,6 +112,16 @@ export async function runScenarios(
 			outcomes.push({ id: scenario.id, title: scenario.title, status: "passed", durationMs });
 		} catch (err) {
 			const durationMs = Date.now() - start;
+			if (err instanceof ScenarioSkipped) {
+				outcomes.push({
+					id: scenario.id,
+					title: scenario.title,
+					status: "skipped",
+					durationMs,
+					error: err.message,
+				});
+				continue;
+			}
 			const message = err instanceof Error ? `${err.message}` : String(err);
 			outcomes.push({
 				id: scenario.id,
@@ -150,6 +160,29 @@ export class AcceptanceError extends Error {
 		super(message, opts);
 		this.name = "AcceptanceError";
 	}
+}
+
+/**
+ * Thrown by `scenario.run()` to record the scenario as `skipped` with a
+ * reason rather than `failed`. Used by env-gated scenarios (e.g.
+ * scenario 19 / warren-on-postgres requires WARREN_TEST_PG_URL) so the
+ * default `bun run scripts/acceptance/run.ts` invocation stays green on
+ * a stock machine while the gated scenario lights up in CI matrix jobs
+ * that opt in.
+ */
+export class ScenarioSkipped extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "ScenarioSkipped";
+	}
+}
+
+/**
+ * Convenience: throw `ScenarioSkipped(reason)`. Lets a scenario opener
+ * read as `if (!ready) skipScenario("WARREN_TEST_PG_URL not set")`.
+ */
+export function skipScenario(reason: string): never {
+	throw new ScenarioSkipped(reason);
 }
 
 export function assertEqual<T>(actual: T, expected: T, message: string): void {
