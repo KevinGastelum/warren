@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.3] — 2026-05-14
+
 R-19 (per-run preview environments) ships. Plan `pl-2c59` closed all
 11 implementation steps on top of the SPEC §11.L design lock.
 Operators set `WARREN_PREVIEW_HOST=preview.<your-host>` and point a
