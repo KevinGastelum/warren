@@ -313,7 +313,7 @@ describe("deleteProject", () => {
 			clone: fakeClone(),
 		});
 
-		const runsRepo = new RunsRepo(db.drizzle);
+		const runsRepo = new RunsRepo(DrizzleAdapter.for(db));
 		// Seed a referencing agent + run before the delete.
 		db.raw.exec(
 			"INSERT INTO agents (name, rendered_json, registered_at, last_refreshed) VALUES ('claude-code', '{}', '2026-05-09T00:00:00.000Z', '2026-05-09T00:00:00.000Z')",

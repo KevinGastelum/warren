@@ -111,7 +111,7 @@ describe("PreviewPortAllocator", () => {
 		});
 		agentName = a.name;
 		projectId = p.id;
-		runsRepo = new RunsRepo(db.drizzle);
+		runsRepo = new RunsRepo(DrizzleAdapter.for(db));
 	});
 
 	afterEach(async () => {

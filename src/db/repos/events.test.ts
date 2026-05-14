@@ -1,11 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { generateId } from "../../core/ids.ts";
-import type { SqliteDrizzleDb } from "../client.ts";
 import { isPostgresTestEnabled, withDb } from "../testing.ts";
 import { AgentsRepo } from "./agents.ts";
 import { DrizzleAdapter } from "./drizzle-adapter.ts";
 import { EventsRepo } from "./events.ts";
 import { ProjectsRepo } from "./projects.ts";
+import { RunsRepo } from "./runs.ts";
 
 function suite(dialect: "sqlite" | "postgres"): void {
 	describe(`EventsRepo (${dialect})`, () => {
@@ -14,6 +13,7 @@ function suite(dialect: "sqlite" | "postgres"): void {
 			const adapter = DrizzleAdapter.for(handle.db);
 			const agents = new AgentsRepo(adapter);
 			const projects = new ProjectsRepo(adapter);
+			const runs = new RunsRepo(adapter);
 			const events = new EventsRepo(adapter);
 			await agents.upsert({ name: "refactor-bot", renderedJson: {} });
 			const project = await projects.create({
@@ -21,23 +21,14 @@ function suite(dialect: "sqlite" | "postgres"): void {
 				localPath: "/data/projects/x/y",
 				defaultBranch: "main",
 			});
-			// RunsRepo is not yet on the adapter (pl-f1be step 5), so seed the
-			// FK target row directly through the adapter to keep this test
-			// dialect-polymorphic.
-			const runId = generateId("run");
-			const db = adapter.drizzle as SqliteDrizzleDb;
-			await adapter.runWrite(
-				db.insert(adapter.schema.runs).values({
-					id: runId,
-					agentName: "refactor-bot",
-					projectId: project.id,
-					renderedAgentJson: {},
-					state: "queued",
-					prompt: "x",
-					trigger: "manual",
-				}),
-			);
-			return { handle, events, runId };
+			const run = await runs.create({
+				agentName: "refactor-bot",
+				projectId: project.id,
+				renderedAgentJson: {},
+				prompt: "x",
+				trigger: "manual",
+			});
+			return { handle, events, runId: run.id };
 		};
 
 		function append(

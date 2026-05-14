@@ -1,12 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { eq } from "drizzle-orm";
 import { NotFoundError } from "../../core/errors.ts";
-import { generateId } from "../../core/ids.ts";
 import type { SqliteDrizzleDb } from "../client.ts";
 import { isPostgresTestEnabled, withDb } from "../testing.ts";
 import { AgentsRepo } from "./agents.ts";
 import { DrizzleAdapter } from "./drizzle-adapter.ts";
 import { ProjectsRepo } from "./projects.ts";
+import { RunsRepo } from "./runs.ts";
 import { TriggersRepo } from "./triggers.ts";
 
 function suite(dialect: "sqlite" | "postgres"): void {
@@ -16,6 +16,7 @@ function suite(dialect: "sqlite" | "postgres"): void {
 			const adapter = DrizzleAdapter.for(handle.db);
 			const agents = new AgentsRepo(adapter);
 			const projects = new ProjectsRepo(adapter);
+			const runs = new RunsRepo(adapter);
 			const repo = new TriggersRepo(adapter);
 			const a = await agents.upsert({ name: "refactor-bot", renderedJson: { sections: {} } });
 			const p = await projects.create({
@@ -23,23 +24,14 @@ function suite(dialect: "sqlite" | "postgres"): void {
 				localPath: "/data/projects/x/y",
 				defaultBranch: "main",
 			});
-			// RunsRepo is not yet on the adapter (pl-f1be step 5), so seed the
-			// FK target row directly through the adapter to keep this test
-			// dialect-polymorphic (matches events.test.ts).
-			const runId = generateId("run");
-			const db = adapter.drizzle as SqliteDrizzleDb;
-			await adapter.runWrite(
-				db.insert(adapter.schema.runs).values({
-					id: runId,
-					agentName: a.name,
-					projectId: p.id,
-					renderedAgentJson: { sections: {} },
-					state: "queued",
-					prompt: "p",
-					trigger: "cron",
-				}),
-			);
-			return { handle, adapter, projects, repo, projectId: p.id, runId };
+			const run = await runs.create({
+				agentName: a.name,
+				projectId: p.id,
+				renderedAgentJson: { sections: {} },
+				prompt: "p",
+				trigger: "cron",
+			});
+			return { handle, adapter, projects, repo, projectId: p.id, runId: run.id };
 		};
 
 		test("upsert composes the row id from project + trigger", async () => {

@@ -13,15 +13,15 @@
 import { and, asc, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { NotFoundError, StateTransitionError, ValidationError } from "../../core/errors.ts";
 import { generateId } from "../../core/ids.ts";
-import type { DrizzleDb } from "../client.ts";
-import {
-	type PreviewState,
-	type RunFailureReason,
-	type RunRow,
-	type RunState,
-	type RunTerminalState,
-	runs,
+import type { SqliteDrizzleDb } from "../client.ts";
+import type {
+	PreviewState,
+	RunFailureReason,
+	RunRow,
+	RunState,
+	RunTerminalState,
 } from "../schema.ts";
+import type { DrizzleAdapter } from "./drizzle-adapter.ts";
 
 const ALLOWED_TRANSITIONS: Record<RunState, readonly RunState[]> = {
 	queued: ["running", "cancelled"],
@@ -80,7 +80,15 @@ export interface AttachPreviewInput {
 }
 
 export class RunsRepo {
-	constructor(private readonly db: DrizzleDb) {}
+	constructor(private readonly adapter: DrizzleAdapter) {}
+
+	private get db(): SqliteDrizzleDb {
+		return this.adapter.drizzle as SqliteDrizzleDb;
+	}
+
+	private get runs() {
+		return this.adapter.schema.runs;
+	}
 
 	async create(input: CreateRunInput): Promise<RunRow> {
 		const row: RunRow = {
@@ -109,12 +117,15 @@ export class RunsRepo {
 			previewLastHitAt: null,
 			previewFailureMessage: null,
 		};
-		this.db.insert(runs).values(row).run();
+		await this.adapter.runWrite(this.db.insert(this.runs).values(row));
 		return row;
 	}
 
 	async get(id: string): Promise<RunRow | null> {
-		return this.db.select().from(runs).where(eq(runs.id, id)).get() ?? null;
+		const row = await this.adapter.pickOne(
+			this.db.select().from(this.runs).where(eq(this.runs.id, id)),
+		);
+		return row ?? null;
 	}
 
 	async require(id: string): Promise<RunRow> {
@@ -124,37 +135,44 @@ export class RunsRepo {
 	}
 
 	async listAll(limit = 100): Promise<RunRow[]> {
-		return this.db
-			.select()
-			.from(runs)
-			.orderBy(desc(runs.startedAt), asc(runs.id))
-			.limit(limit)
-			.all();
+		return this.adapter.pickAll(
+			this.db
+				.select()
+				.from(this.runs)
+				.orderBy(desc(this.runs.startedAt), asc(this.runs.id))
+				.limit(limit),
+		);
 	}
 
 	async listByProject(projectId: string, limit = 100): Promise<RunRow[]> {
-		return this.db
-			.select()
-			.from(runs)
-			.where(eq(runs.projectId, projectId))
-			.orderBy(desc(runs.startedAt), asc(runs.id))
-			.limit(limit)
-			.all();
+		return this.adapter.pickAll(
+			this.db
+				.select()
+				.from(this.runs)
+				.where(eq(this.runs.projectId, projectId))
+				.orderBy(desc(this.runs.startedAt), asc(this.runs.id))
+				.limit(limit),
+		);
 	}
 
 	async listByAgent(agentName: string, limit = 100): Promise<RunRow[]> {
-		return this.db
-			.select()
-			.from(runs)
-			.where(eq(runs.agentName, agentName))
-			.orderBy(desc(runs.startedAt), asc(runs.id))
-			.limit(limit)
-			.all();
+		return this.adapter.pickAll(
+			this.db
+				.select()
+				.from(this.runs)
+				.where(eq(this.runs.agentName, agentName))
+				.orderBy(desc(this.runs.startedAt), asc(this.runs.id))
+				.limit(limit),
+		);
 	}
 
 	async listByState(state: RunState | RunState[]): Promise<RunRow[]> {
-		const where = Array.isArray(state) ? inArray(runs.state, state) : eq(runs.state, state);
-		return this.db.select().from(runs).where(where).orderBy(asc(runs.id)).all();
+		const where = Array.isArray(state)
+			? inArray(this.runs.state, state)
+			: eq(this.runs.state, state);
+		return this.adapter.pickAll(
+			this.db.select().from(this.runs).where(where).orderBy(asc(this.runs.id)),
+		);
 	}
 
 	/**
@@ -178,7 +196,7 @@ export class RunsRepo {
 		if (input.burrowId !== undefined) patch.burrowId = input.burrowId;
 		if (input.burrowRunId !== undefined) patch.burrowRunId = input.burrowRunId;
 		if (input.workerId !== undefined) patch.workerId = input.workerId;
-		this.db.update(runs).set(patch).where(eq(runs.id, id)).run();
+		await this.adapter.runWrite(this.db.update(this.runs).set(patch).where(eq(this.runs.id, id)));
 		return { ...current, ...patch };
 	}
 
@@ -189,7 +207,7 @@ export class RunsRepo {
 			state: "running" as const,
 			startedAt: now.toISOString(),
 		};
-		this.db.update(runs).set(patch).where(eq(runs.id, id)).run();
+		await this.adapter.runWrite(this.db.update(this.runs).set(patch).where(eq(this.runs.id, id)));
 		return { ...current, ...patch };
 	}
 
@@ -206,7 +224,7 @@ export class RunsRepo {
 			endedAt: now.toISOString(),
 			failureReason: terminal === "failed" ? failureReason : null,
 		};
-		this.db.update(runs).set(patch).where(eq(runs.id, id)).run();
+		await this.adapter.runWrite(this.db.update(this.runs).set(patch).where(eq(this.runs.id, id)));
 		return { ...current, ...patch };
 	}
 
@@ -237,7 +255,7 @@ export class RunsRepo {
 				(patch as Record<string, number | null>)[k] = input[k] as number | null;
 			}
 		}
-		this.db.update(runs).set(patch).where(eq(runs.id, id)).run();
+		await this.adapter.runWrite(this.db.update(this.runs).set(patch).where(eq(this.runs.id, id)));
 		return { ...current, ...patch };
 	}
 
@@ -268,7 +286,7 @@ export class RunsRepo {
 				(patch as Record<string, unknown>)[k] = input[k];
 			}
 		}
-		this.db.update(runs).set(patch).where(eq(runs.id, id)).run();
+		await this.adapter.runWrite(this.db.update(this.runs).set(patch).where(eq(this.runs.id, id)));
 		return { ...current, ...patch };
 	}
 
@@ -280,7 +298,9 @@ export class RunsRepo {
 	 */
 	async setPrUrl(id: string, prUrl: string | null): Promise<RunRow> {
 		const current = await this.require(id);
-		this.db.update(runs).set({ prUrl }).where(eq(runs.id, id)).run();
+		await this.adapter.runWrite(
+			this.db.update(this.runs).set({ prUrl }).where(eq(this.runs.id, id)),
+		);
 		return { ...current, prUrl };
 	}
 
@@ -294,17 +314,21 @@ export class RunsRepo {
 	 * one started later in startedAt order.
 	 */
 	async mostRecentSucceededWithWorker(projectId: string): Promise<RunRow | null> {
-		return (
+		const row = await this.adapter.pickOne(
 			this.db
 				.select()
-				.from(runs)
+				.from(this.runs)
 				.where(
-					and(eq(runs.projectId, projectId), eq(runs.state, "succeeded"), isNotNull(runs.workerId)),
+					and(
+						eq(this.runs.projectId, projectId),
+						eq(this.runs.state, "succeeded"),
+						isNotNull(this.runs.workerId),
+					),
 				)
-				.orderBy(desc(runs.endedAt), asc(runs.id))
-				.limit(1)
-				.get() ?? null
+				.orderBy(desc(this.runs.endedAt), asc(this.runs.id))
+				.limit(1),
 		);
+		return row ?? null;
 	}
 
 	/**
@@ -315,15 +339,16 @@ export class RunsRepo {
 	 * with zero in-flight runs are absent (the caller defaults to 0).
 	 */
 	async countInflightByWorker(): Promise<Map<string, number>> {
-		const rows = this.db
-			.select({
-				workerId: runs.workerId,
-				count: sql<number>`count(*)`.as("count"),
-			})
-			.from(runs)
-			.where(and(isNotNull(runs.workerId), inArray(runs.state, ["queued", "running"])))
-			.groupBy(runs.workerId)
-			.all();
+		const rows = await this.adapter.pickAll<{ workerId: string | null; count: number | string }>(
+			this.db
+				.select({
+					workerId: this.runs.workerId,
+					count: sql<number>`count(*)`.as("count"),
+				})
+				.from(this.runs)
+				.where(and(isNotNull(this.runs.workerId), inArray(this.runs.state, ["queued", "running"])))
+				.groupBy(this.runs.workerId),
+		);
 		const out = new Map<string, number>();
 		for (const r of rows) {
 			if (r.workerId !== null) out.set(r.workerId, Number(r.count));
@@ -338,14 +363,18 @@ export class RunsRepo {
 	 * this up" observation.
 	 */
 	async claimById(id: string, now: Date = new Date()): Promise<RunRow | null> {
-		return this.db.transaction((tx) => {
-			const row = tx.select().from(runs).where(eq(runs.id, id)).get();
+		return this.adapter.runInTransaction(async (tx) => {
+			const txDb = tx.drizzle as SqliteDrizzleDb;
+			const runs = tx.schema.runs;
+			const row = await tx.pickOne(txDb.select().from(runs).where(eq(runs.id, id)));
 			if (!row || row.state !== "queued") return null;
 			const startedAt = now.toISOString();
-			tx.update(runs)
-				.set({ state: "running", startedAt })
-				.where(and(eq(runs.id, id), eq(runs.state, "queued")))
-				.run();
+			await tx.runWrite(
+				txDb
+					.update(runs)
+					.set({ state: "running", startedAt })
+					.where(and(eq(runs.id, id), eq(runs.state, "queued"))),
+			);
 			return { ...row, state: "running", startedAt };
 		});
 	}
