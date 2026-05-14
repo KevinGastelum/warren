@@ -1144,7 +1144,9 @@ full `WARREN_PREVIEW_*` knob table) is documented in
 [`.env.example`](.env.example). Static-site previews
 (`type: static`), PR-template configurability, the `.warren/` YAML
 reorg, and a PR-close webhook → preview-teardown hook stay as
-sibling follow-ups under `pl-2c59`.
+sibling follow-ups under `pl-2c59`. The PR-close webhook teardown
+design is locked in §11.N (V2, awaits webhook receiver
+infrastructure tracked next to R-18).
 
 **Burrow-side dependency.** Burrow's bwrap profile is outbound-only
 today (§8.1, `network: 'none' | 'restricted' | 'open'`), and the run
@@ -1232,7 +1234,13 @@ preview yanked because N hours elapsed. The eviction worker
    required, idempotent, emits `preview_torn_down`. UI exposes a button
    in `starting` / `live` states. Polite recourse when reviewer is done.
 
-All four eviction paths free the port and stop the sidecar process. The
+A V2 fifth signal — **PR-close webhook teardown** — funnels through the
+same `teardownPreview` path with a structured `actor` tag once warren
+ships a GitHub webhook receiver. Locked separately in §11.N to avoid
+extending `EvictionReason` for code that can't land until the webhook
+surface exists.
+
+All eviction paths free the port and stop the sidecar process. The
 **burrow workspace stays** — only the preview process dies. Workspace
 cleanup is a separate concern keyed off the run's lifecycle, not the
 preview's, so a re-launch (e.g. if R-12 remote-worker future ever wants
@@ -1390,6 +1398,125 @@ them into `reapRun({ prTemplate })` on succeeded-outcome reaps.
 `buildPrContent` accepts `templateOverrides` and forwards into
 `composeBody` / `composeTitle`. Failures from the loader fall through
 to the built-in defaults — the PR still gets opened.
+
+### 11.N PR-close webhook → preview teardown (warren-38f7, 2026-05-14)
+
+Design lock for the V2 fifth eviction signal called out in §11.L.
+Adopted into plan `pl-2c59` as a sibling follow-up; implementation is
+deferred until warren ships a GitHub webhook receiver (the event-driven
+half of the scheduler, §3.1 / ROADMAP R-06 follow-up, synergistic with
+R-18 webhook-secret handling). This section exists so when that
+infrastructure lands, the teardown hook is a single new event handler,
+not a fresh round of design.
+
+**Why now, when the code can't land.** R-19's design lock (§11.L)
+settled on four eviction signals. The cleanest fifth — "the reviewer
+merged or closed the PR, the preview is no longer needed" — wasn't
+shippable in V1 because warren has no GitHub webhook surface. Filing
+the design lock alongside R-19 (rather than waiting for webhook infra)
+keeps the eviction story in one place and prevents the eventual handler
+from sliding back into a fresh "should we extend `EvictionReason` or
+reuse `teardownPreview`?" debate.
+
+**Trigger source.** GitHub `pull_request` event with `action ∈
+{closed}`. Both merge (`pull_request.merged === true`) and
+close-without-merge (`merged === false`) fire `action: closed`; both
+mean the preview is no longer load-bearing. No other PR action triggers
+teardown — `opened`, `synchronize`, `reopened`, label changes are
+explicitly out of scope (a reopened PR can keep its preview if the
+original run's workspace is still live; if the run was reaped, a new
+run is the right shape, not preview resurrection).
+
+**Run lookup.** The webhook handler resolves the matching run via
+`runs.pr_url = pull_request.html_url`. The column is already populated
+by `pr_open` (see §11.L) and the PR URL is stable for the PR's
+lifetime. No new index is required for V1 cardinality (a single warren
+host serves on the order of thousands of runs; a SQL scan against
+`preview_state IN ('starting','live')` first narrows the candidate
+set). The lookup is "exactly one or zero rows" — a webhook for a PR
+warren never opened (e.g. a hand-opened PR on the same repo) returns a
+200 no-op.
+
+**Reuse `teardownPreview`, do not extend `EvictionReason`.** The
+webhook handler calls `teardownPreview({ runId, actor })` (§11.L,
+`warren-d725`). Rationale:
+
+- The CAS in `RunPreviewsRepo.claimTeardown` already serializes against
+  the eviction worker and the manual route, so a webhook racing an
+  idle-TTL sweep deterministically lands in exactly one of them.
+- `preview_torn_down` already carries an `actor` field for attribution.
+  A structured tag (`actor: "github-webhook:pr_merged"` or
+  `"github-webhook:pr_closed_unmerged"`) distinguishes the trigger
+  source without growing the `EvictionReason` enum or adding a new
+  event kind.
+- "All eviction paths funnel through one idempotent action" (seed
+  framing) is satisfied: the existing teardown route is the funnel.
+- The seed's original "emit `preview_evicted` with `reason='pr_closed'`"
+  framing predated the warren-d725 split between `preview_torn_down`
+  (operator/external trigger, carries `actor`) and `preview_evicted`
+  (worker sweep, carries `EvictionReason`). The lock resolves it
+  toward the `preview_torn_down` side because a PR close is an
+  external trigger, not a periodic sweep.
+
+**Handler shape.** A new module (`src/webhooks/github/pull-request.ts`
+once the receiver lands — exact path is the webhook track's call) does:
+
+    if (event.action !== "closed") return { handled: false };
+    const run = await repos.runs.findOneByPrUrl(event.pull_request.html_url);
+    if (!run) return { handled: false, reason: "no-matching-run" };
+    if (run.previewState !== "starting" && run.previewState !== "live") {
+      return { handled: true, status: "already-terminal" };
+    }
+    const actor = event.pull_request.merged
+      ? "github-webhook:pr_merged"
+      : "github-webhook:pr_closed_unmerged";
+    return teardownPreview({ runId: run.id, repos, previews,
+      burrowClientPool, broker, actor });
+
+`RunsRepo.findOneByPrUrl` does not exist today; it's a one-method
+addition when the handler lands. No migration, no new column.
+
+**Idempotency & failure modes.**
+
+- GitHub redelivers webhooks aggressively. Second delivery: CAS sees
+  `preview_state='torn-down'` and returns the existing
+  `already-torn-down` branch with `tornDown: false`. No second
+  `preview_torn_down` event emitted.
+- Webhook arrives before `pr_open`'s annotate completes (unlikely but
+  possible if GitHub fires very fast): the run still has
+  `preview_state='starting'`; the CAS still transitions it; the
+  preview never reaches `live`. Acceptable — the reviewer closed the
+  PR before the preview was usable anyway.
+- Webhook arrives for a `preview_state='failed'` run: no-op (the CAS
+  rejects the transition; handler returns `already-terminal`).
+- Webhook arrives for a project that never opted in: `pr_url` is null
+  (no PR was opened) or matches but `preview_state` is null — no-op.
+
+**Out of scope for this lock.**
+
+- Webhook signature verification (HMAC over the raw body using the
+  configured webhook secret). Owned by the future receiver module
+  (§3.1 / R-18-adjacent), not by this handler. Without verification
+  the receiver doesn't run; with it, this handler trusts the parsed
+  payload.
+- GitHub App auth (R-18) for resolving the matching run when warren
+  ever supports multi-repo-per-project. V1 single-PAT, single-repo
+  posture means `pr_url` uniquely identifies the run.
+- Label-triggered teardown ("preview-stale" label, etc.) and
+  manual-dispatch teardown via comment commands. These are separate
+  sibling features; if shipped, they reuse the same `teardownPreview`
+  funnel with a different `actor` tag.
+- Cross-host (R-12) routing. The proxy preamble already returns 501
+  for non-local workers; the teardown path doesn't need cross-host
+  awareness because `teardownPreview` operates on `runs` rows and
+  `burrowClientPool`, both of which the local worker can address.
+
+**When this turns on.** The webhook receiver is the gate. When it
+lands (signature verification, route mounting, secret storage), this
+handler is one ~20-line module + one repo method + one acceptance
+scenario. The seed `warren-38f7` stays open as the implementation
+tracker; closing the design-lock half is intentional so the
+implementation work isn't blocked on re-deriving the design.
 
 ---
 

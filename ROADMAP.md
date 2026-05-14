@@ -1306,7 +1306,9 @@ Operator setup (wildcard CNAME, Caddy DNS-01 snippet, all
 and [`.env.example`](.env.example). Static-site previews
 (`type: static`), PR-template configurability, the `.warren/` YAML
 reorg, and a PR-close webhook → teardown hook stay as sibling
-follow-ups under `pl-2c59`.
+follow-ups under `pl-2c59` (the PR-close webhook design is locked
+in SPEC §11.N; implementation waits on the webhook receiver,
+synergistic with R-18).
 
 **Decisions locked in SPEC §11.L (2026-05-14 design pass).**
 
@@ -1613,4 +1615,5 @@ R-09 is repromoted and R-12 through R-18 are slotted in.
     locally to verify" into "click the URL." Static-mode previews
     (`type: static`), PR-template configurability, the `.warren/`
     YAML reorg, and a PR-close → teardown webhook stay as sibling
-    follow-ups under `pl-2c59`.
+    follow-ups under `pl-2c59` (PR-close webhook design locked in
+    SPEC §11.N; implementation waits on the webhook receiver).
