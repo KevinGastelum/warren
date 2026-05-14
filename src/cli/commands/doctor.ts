@@ -27,11 +27,13 @@ import {
 	checkCanopyClean,
 	checkCanopyClone,
 	checkDatabaseReachable,
+	checkPreviewPortAllocator,
 	checkWarrenConfig,
 	checkWarrenDb,
 	type DiagnosticCheck,
 	type WarrenConfigCheckProject,
 } from "../../diagnostics/checks.ts";
+import { loadPreviewPortRangeFromEnv, PreviewPortAllocator } from "../../preview/port-allocator.ts";
 import { loadProjectsConfigFromEnv } from "../../projects/config.ts";
 import type { CliContext, EnvLike } from "../output.ts";
 import { writeJsonLine } from "../output.ts";
@@ -90,6 +92,8 @@ export async function runDoctor(
 	checks.push(await checkBwrap({ spawn: context.spawn }));
 
 	checks.push(await checkWarrenConfig({ projects: deps.projects ?? [] }));
+
+	checks.push(await previewPortAllocatorCheck(context.env, deps.db));
 
 	checks.push(await burrowCheck(context.env, deps.probeBurrow));
 
@@ -152,6 +156,51 @@ function projectsRootCheck(env: EnvLike, exists: (path: string) => boolean): Doc
 			? config.root
 			: `${config.root} (will be created on first project add)`,
 	};
+}
+
+async function previewPortAllocatorCheck(
+	env: EnvLike,
+	db: AnyWarrenDb | undefined,
+): Promise<DoctorCheck> {
+	// Range parse is the operator-facing typo path; surface it as a check
+	// failure before we touch the db so the message names the env var.
+	let range: ReturnType<typeof loadPreviewPortRangeFromEnv>;
+	try {
+		range = loadPreviewPortRangeFromEnv(env);
+	} catch (err) {
+		if (err instanceof ValidationError) {
+			return {
+				name: "preview_port_allocator",
+				ok: false,
+				message: err.message,
+				...(err.recoveryHint !== undefined ? { hint: err.recoveryHint } : {}),
+			};
+		}
+		return {
+			name: "preview_port_allocator",
+			ok: false,
+			message: err instanceof Error ? err.message : String(err),
+		};
+	}
+	if (db === undefined) {
+		return {
+			name: "preview_port_allocator",
+			ok: true,
+			message: `no db handle wired (range ${range.start}-${range.end})`,
+		};
+	}
+	// Allocator construction is non-destructive — usage() is a pure read
+	// against the runs table. Sqlite-only today; the pg branch lights up
+	// when the repo layer becomes dialect-aware (pl-f17e follow-up).
+	if (db.dialect !== "sqlite") {
+		return {
+			name: "preview_port_allocator",
+			ok: true,
+			message: `dialect=${db.dialect} (allocator usage probe is sqlite-only today)`,
+		};
+	}
+	const allocator = new PreviewPortAllocator(db, range);
+	return checkPreviewPortAllocator({ probe: allocator });
 }
 
 async function burrowCheck(

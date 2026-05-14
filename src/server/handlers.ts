@@ -43,9 +43,11 @@ import {
 	checkCanopyClean,
 	checkCanopyClone,
 	checkDatabaseReachable,
+	checkPreviewPortAllocator,
 	checkWarrenConfig,
 	type DiagnosticCheck,
 } from "../diagnostics/checks.ts";
+import { DEFAULT_PREVIEW_PORT_RANGE, PreviewPortAllocator } from "../preview/port-allocator.ts";
 import type { SpawnFn, SpawnOptions, SpawnResult } from "../projects/clone.ts";
 import { addProject, deleteProject, listProjects, refreshProject } from "../projects/index.ts";
 import { type AgentSource, readAgentSource } from "../registry/builtins/index.ts";
@@ -843,6 +845,7 @@ function readyz(deps: ServerDeps): RouteHandler {
 				...(deps.warrenConfigs !== undefined ? { cache: deps.warrenConfigs } : {}),
 			}),
 		);
+		checks.push(await previewPortAllocatorReadyzCheck(deps));
 
 		const allOk = checks.every((c) => c.ok);
 		return jsonResponse(allOk ? 200 : 503, {
@@ -850,6 +853,29 @@ function readyz(deps: ServerDeps): RouteHandler {
 			checks,
 		});
 	};
+}
+
+async function previewPortAllocatorReadyzCheck(deps: ServerDeps): Promise<DiagnosticCheck> {
+	// Range is resolved at boot (`ServerDeps.previewPortRange`) so /readyz
+	// doesn't re-parse env per request. Tests omit deps.previewPortRange;
+	// fall back to defaults so the probe still exercises the codepath.
+	const range = deps.previewPortRange ?? DEFAULT_PREVIEW_PORT_RANGE;
+	if (deps.db === undefined) {
+		return {
+			name: "preview_port_allocator",
+			ok: true,
+			message: `no db handle wired (range ${range.start}-${range.end})`,
+		};
+	}
+	if (deps.db.dialect !== "sqlite") {
+		return {
+			name: "preview_port_allocator",
+			ok: true,
+			message: `dialect=${deps.db.dialect} (allocator usage probe is sqlite-only today)`,
+		};
+	}
+	const allocator = new PreviewPortAllocator(deps.db, range);
+	return checkPreviewPortAllocator({ probe: allocator });
 }
 
 async function checkAgentsRegistered(deps: ServerDeps): Promise<DiagnosticCheck> {

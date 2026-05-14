@@ -28,6 +28,7 @@ import { BurrowClientPool } from "../burrow-client/index.ts";
 import { type AnyWarrenDb, openDatabase, WARREN_DB_POOL_MAX_ENV } from "../db/client.ts";
 import { createRepos } from "../db/repos/index.ts";
 import { parseDatabaseUrl } from "../db/url.ts";
+import { loadPreviewPortRangeFromEnv } from "../preview/port-allocator.ts";
 import type { SpawnFn, SpawnOptions, SpawnResult } from "../projects/clone.ts";
 import { loadProjectsConfigFromEnv } from "../projects/config.ts";
 import { seedBuiltinAgents } from "../registry/builtins/index.ts";
@@ -185,6 +186,7 @@ export async function bootServer(opts: BootServerOptions = {}): Promise<WarrenSe
 
 	const warrenConfigs = createWarrenConfigCache();
 	const runBranchPrefixDefault = loadRunBranchPrefixFromEnv(env);
+	const previewPortRange = loadPreviewPortRangeFromEnv(env);
 
 	const probeConfig = loadWorkerProbeConfigFromEnv(env);
 	const workerProbe = startWorkerProbe({
@@ -241,6 +243,7 @@ export async function bootServer(opts: BootServerOptions = {}): Promise<WarrenSe
 		autoOpenPr,
 		warrenConfigs,
 		...(runBranchPrefixDefault !== undefined ? { runBranchPrefixDefault } : {}),
+		previewPortRange,
 		...(opts.now !== undefined ? { now: opts.now } : {}),
 	};
 

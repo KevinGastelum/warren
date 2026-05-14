@@ -23,6 +23,7 @@ import type { BurrowClientPool } from "../burrow-client/pool.ts";
 import { ValidationError } from "../core/errors.ts";
 import { type AnyWarrenDb, pingDatabase } from "../db/client.ts";
 import { parseDatabaseUrl, sqliteUrlForPath } from "../db/url.ts";
+import { type PortUsage, PREVIEW_PORT_USAGE_WARN_RATIO } from "../preview/port-allocator.ts";
 import type { SpawnFn } from "../projects/clone.ts";
 import { type CanopyRegistryConfig, loadCanopyRegistryConfigFromEnv } from "../registry/config.ts";
 import {
@@ -386,6 +387,47 @@ export async function checkDatabaseReachable(deps: {
 					: "verify WARREN_DB_URL (or WARREN_DB_PATH) points at a writable sqlite file",
 		};
 	}
+}
+
+/**
+ * Preview port allocator saturation (R-19 / SPEC §11.L, warren-2277). Fails
+ * when ≥ `warnRatio` of the configured port range is in use by `starting`
+ * or `live` runs — operators can either raise `WARREN_PREVIEW_PORT_RANGE`
+ * or tighten idle-TTL / max-lifetime so the eviction worker reclaims
+ * faster. Pure: takes a `usage()` probe (the allocator implements it) so
+ * tests don't need a live db handle.
+ */
+export interface PreviewPortUsageProbe {
+	usage(): Promise<PortUsage>;
+}
+
+export async function checkPreviewPortAllocator(deps: {
+	readonly probe: PreviewPortUsageProbe;
+	readonly warnRatio?: number;
+}): Promise<DiagnosticCheck> {
+	const warnRatio = deps.warnRatio ?? PREVIEW_PORT_USAGE_WARN_RATIO;
+	let usage: PortUsage;
+	try {
+		usage = await deps.probe.usage();
+	} catch (err) {
+		return {
+			name: "preview_port_allocator",
+			ok: false,
+			message: err instanceof Error ? err.message : String(err),
+			hint: "verify WARREN_DB_URL is reachable and the runs table has the preview columns (migration 0009)",
+		};
+	}
+	const ratio = usage.total === 0 ? 1 : usage.inUse / usage.total;
+	const summary = `${usage.inUse}/${usage.total} ports in use (range ${usage.range.start}-${usage.range.end})`;
+	if (ratio >= warnRatio) {
+		return {
+			name: "preview_port_allocator",
+			ok: false,
+			message: `${summary}, ≥ ${Math.round(warnRatio * 100)}% saturation`,
+			hint: "raise WARREN_PREVIEW_PORT_RANGE or tighten WARREN_PREVIEW_IDLE_TTL / WARREN_PREVIEW_MAX_LIFETIME so the eviction worker reclaims faster",
+		};
+	}
+	return { name: "preview_port_allocator", ok: true, message: summary };
 }
 
 /**

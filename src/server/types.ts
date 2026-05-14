@@ -155,6 +155,14 @@ export interface ServerDeps {
 	 * still wins. Unset → spawnRun falls back to "burrow".
 	 */
 	readonly runBranchPrefixDefault?: string;
+	/**
+	 * Preview port allocator range (R-19 / SPEC §11.L, warren-2277).
+	 * Resolved from `WARREN_PREVIEW_PORT_RANGE` at boot so `/readyz`'s
+	 * `preview_port_allocator` saturation probe matches what the reap-time
+	 * launcher allocates against. Tests may omit; the probe degrades to
+	 * an informational `ok: true`.
+	 */
+	readonly previewPortRange?: { readonly start: number; readonly end: number };
 }
 
 /**
