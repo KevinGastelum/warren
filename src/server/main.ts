@@ -24,7 +24,7 @@
  */
 
 import pino from "pino";
-import { BurrowClient } from "../burrow-client/index.ts";
+import { BurrowClientPool } from "../burrow-client/index.ts";
 import { openDatabase, type WarrenDb } from "../db/client.ts";
 import { createRepos } from "../db/repos/index.ts";
 import type { SpawnFn, SpawnOptions, SpawnResult } from "../projects/clone.ts";
@@ -72,7 +72,19 @@ export async function bootServer(opts: BootServerOptions = {}): Promise<WarrenSe
 
 	const db = await openDatabase({ path: serverConfig.dbPath });
 	const repos = createRepos(db);
-	const burrowClient = BurrowClient.fromEnv(env);
+	// BurrowClientPool replaces the old `BurrowClient.fromEnv()` singleton
+	// (warren-41a2 / pl-9ba1 step 3). Today's zero-config deploy materializes
+	// a single 'local' worker from WARREN_BURROW_* env vars; step 7 will add
+	// `[workers]` config so multi-worker deploys register additional entries.
+	// `pool.singleton()` is back-compat scaffolding: bridges / scheduler /
+	// spawnRun consume the legacy `burrowClient` variable until steps 4 and 5
+	// route them through `placeFor` / `clientFor`.
+	const burrowClientPool = BurrowClientPool.fromEnv({
+		env,
+		repos,
+		...(opts.now !== undefined ? { now: opts.now } : {}),
+	});
+	const burrowClient = burrowClientPool.singleton();
 	const broker = new RunEventBroker();
 
 	logger.info(
@@ -190,7 +202,7 @@ export async function bootServer(opts: BootServerOptions = {}): Promise<WarrenSe
 			await handle.stop();
 			await scheduler.stop();
 			await bridgesBoot.registry.stopAll();
-			await burrowClient.close();
+			await burrowClientPool.close();
 			closeDatabase(db);
 		},
 	};

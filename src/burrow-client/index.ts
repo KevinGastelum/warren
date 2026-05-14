@@ -18,3 +18,12 @@ export {
 	loadBurrowClientConfigFromEnv,
 } from "./config.ts";
 export { BurrowUnreachableError } from "./errors.ts";
+export {
+	BurrowClientPool,
+	type BurrowClientPoolDeps,
+	type BurrowClientPoolFromEnvOptions,
+	LOCAL_WORKER_NAME,
+	type PlacementResult,
+	type ProbeResult,
+	WorkerClientUnregisteredError,
+} from "./pool.ts";
