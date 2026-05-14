@@ -95,7 +95,7 @@ export async function bootServer(opts: BootServerOptions = {}): Promise<WarrenSe
 		url: serverConfig.dbUrl,
 		...(pgPoolMax !== undefined ? { pgPoolMax } : {}),
 	});
-	const repos = createReposForDialect(db);
+	const repos = createRepos(db);
 
 	// Load the operator-facing TOML config (pl-9ba1 step 7 / warren-3909).
 	// `workers` is `[]` when `[workers]` is absent — the zero-config path
@@ -409,24 +409,6 @@ async function closeDatabase(db: AnyWarrenDb): Promise<void> {
 	} catch {
 		// Closing twice during a panicked shutdown is fine.
 	}
-}
-
-/**
- * Repo layer is sqlite-only today (R-13 pl-f17e: pg widening lands in a
- * later step alongside the test substrate and scenario 19). The boot
- * path opens the URL-driven db but explicitly refuses pg until the
- * repos can speak both dialects — fail-fast with a clear error rather
- * than letting a `.run()` call on a pg drizzle handle throw deep in a
- * request.
- */
-function createReposForDialect(db: AnyWarrenDb): ReturnType<typeof createRepos> {
-	if (db.dialect !== "sqlite") {
-		throw new Error(
-			`WARREN_DB_URL selected the '${db.dialect}' dialect, but the repo layer is sqlite-only today. ` +
-				"Postgres boot lands with pl-f17e step 7 (warren-480a) — keep WARREN_DB_URL unset (or sqlite://) until then.",
-		);
-	}
-	return createRepos(db);
 }
 
 /**

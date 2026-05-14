@@ -61,13 +61,6 @@ export async function withCliDb<T>(
 ): Promise<T> {
 	const url = input.dbUrl ?? resolveDbUrl(input.env).url;
 	const db = await openDatabase({ url });
-	if (db.dialect !== "sqlite") {
-		await db.close().catch(() => undefined);
-		throw new Error(
-			`WARREN_DB_URL selected the '${db.dialect}' dialect, but the CLI's repo layer is sqlite-only today. ` +
-				"Postgres support lands with pl-f17e step 7 (warren-480a); keep WARREN_DB_URL unset (or sqlite://) until then.",
-		);
-	}
 	const repos = createRepos(db);
 	try {
 		return await fn({ db, repos });
