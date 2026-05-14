@@ -143,6 +143,155 @@ describe("BurrowClientPool.fromEnv", () => {
 	});
 });
 
+describe("BurrowClientPool.fromConfig", () => {
+	let db: WarrenDb;
+	let repos: Repos;
+
+	beforeEach(async () => {
+		db = await openDatabase({ path: ":memory:" });
+		repos = createRepos(db);
+	});
+
+	afterEach(() => {
+		db.close();
+	});
+
+	test("registers one client per configured worker, upserting rows", () => {
+		const pool = BurrowClientPool.fromConfig({
+			repos,
+			token: "shared-secret",
+			workers: [
+				{
+					name: "alpha",
+					url: "http://alpha.local:9410",
+					transport: { kind: "tcp", hostname: "alpha.local", port: 9410 },
+				},
+				{
+					name: "beta",
+					url: "unix:///var/run/burrow-beta.sock",
+					transport: { kind: "unix", path: "/var/run/burrow-beta.sock" },
+				},
+			],
+		});
+		expect(pool.size).toBe(2);
+		expect(pool.names()).toEqual(["alpha", "beta"]);
+
+		const alpha = repos.workers.require("alpha");
+		expect(alpha.url).toBe("http://alpha.local:9410");
+		expect(alpha.state).toBe("healthy");
+
+		const beta = repos.workers.require("beta");
+		expect(beta.url).toBe("unix:///var/run/burrow-beta.sock");
+	});
+
+	test("does NOT synthesize the 'local' worker (operator config defines the pool)", () => {
+		const pool = BurrowClientPool.fromConfig({
+			repos,
+			token: "shared-secret",
+			workers: [
+				{
+					name: "alpha",
+					url: "http://alpha.local:9410",
+					transport: { kind: "tcp", hostname: "alpha.local", port: 9410 },
+				},
+			],
+		});
+		expect(pool.has(LOCAL_WORKER_NAME)).toBe(false);
+		expect(repos.workers.get(LOCAL_WORKER_NAME)).toBeNull();
+	});
+
+	test("threads the shared token into every registered BurrowClient", () => {
+		const pool = BurrowClientPool.fromConfig({
+			repos,
+			token: "shared-secret",
+			workers: [
+				{
+					name: "alpha",
+					url: "http://alpha.local:9410",
+					transport: { kind: "tcp", hostname: "alpha.local", port: 9410 },
+				},
+				{
+					name: "beta",
+					url: "unix:///b.sock",
+					transport: { kind: "unix", path: "/b.sock" },
+				},
+			],
+		});
+		expect(pool.get("alpha").config.token).toBe("shared-secret");
+		expect(pool.get("beta").config.token).toBe("shared-secret");
+	});
+
+	test("stamps `addedAt` from the provided `now` clock for new rows", () => {
+		const frozen = new Date("2026-02-03T04:05:06.000Z");
+		BurrowClientPool.fromConfig({
+			repos,
+			token: "shared-secret",
+			now: () => frozen,
+			workers: [
+				{
+					name: "alpha",
+					url: "http://alpha.local:9410",
+					transport: { kind: "tcp", hostname: "alpha.local", port: 9410 },
+				},
+			],
+		});
+		const row = repos.workers.require("alpha");
+		expect(row.addedAt).toBe(frozen.toISOString());
+	});
+
+	test("preserves an existing worker's state across re-boots (probe-derived wins)", () => {
+		repos.workers.upsert({ name: "alpha", url: "http://old:1", state: "draining" });
+		BurrowClientPool.fromConfig({
+			repos,
+			token: "shared-secret",
+			workers: [
+				{
+					name: "alpha",
+					url: "http://alpha.local:9410",
+					transport: { kind: "tcp", hostname: "alpha.local", port: 9410 },
+				},
+			],
+		});
+		const row = repos.workers.require("alpha");
+		expect(row.state).toBe("draining");
+		expect(row.url).toBe("http://alpha.local:9410");
+	});
+
+	test("throws ValidationError on an empty workers array", () => {
+		expect(() =>
+			BurrowClientPool.fromConfig({ repos, token: "shared-secret", workers: [] }),
+		).toThrow(ValidationError);
+	});
+
+	test("forwards a fetch override into every constructed BurrowClient", async () => {
+		let calls = 0;
+		const stubFetch = stub(async () => {
+			calls += 1;
+			return jsonResponse(200, { ok: true });
+		});
+		const pool = BurrowClientPool.fromConfig({
+			repos,
+			token: "shared-secret",
+			fetch: stubFetch,
+			workers: [
+				{
+					name: "alpha",
+					url: "http://a:1",
+					transport: { kind: "tcp", hostname: "a", port: 1 },
+				},
+				{
+					name: "beta",
+					url: "http://b:2",
+					transport: { kind: "tcp", hostname: "b", port: 2 },
+				},
+			],
+		});
+		await pool.get("alpha").probe();
+		await pool.get("beta").probe();
+		expect(calls).toBe(2);
+	});
+});
+
 describe("BurrowClientPool.placeFor / clientFor", () => {
 	let db: WarrenDb;
 	let repos: Repos;

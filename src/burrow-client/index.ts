@@ -27,7 +27,9 @@ export {
 export {
 	BurrowClientPool,
 	type BurrowClientPoolDeps,
+	type BurrowClientPoolFromConfigOptions,
 	type BurrowClientPoolFromEnvOptions,
+	type ConfiguredWorker,
 	LOCAL_WORKER_NAME,
 	type PlacementResult,
 	type ProbeResult,

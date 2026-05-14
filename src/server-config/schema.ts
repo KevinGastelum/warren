@@ -1,14 +1,18 @@
 /**
  * Zod schema for warren's server-level TOML config
- * (pl-9ba1 step 7 / warren-3909).
+ * (pl-9ba1 step 7 / warren-3909; `workers` field added in step 8 /
+ * warren-272c).
  *
- * Step 7 lands the loader scaffolding in isolation so step 8
- * (warren-272c) can extend the schema with the `[workers]` block on a
- * tested foundation (pl-9ba1 risk #6). The schema is intentionally
- * `.strict()` and empty today: any unknown top-level key is rejected
- * with a structured ValidationError. When step 8 adds `workers`, it
- * grows the schema by one field — callers in step 9+ keep working
- * unchanged.
+ * Step 7 landed the loader scaffolding as `z.object({}).strict()` so step
+ * 8 could grow the schema by exactly one field on a tested foundation
+ * (plan risk #6). Step 8 adds `workers`; the schema stays `.strict()` so
+ * any future top-level key still gets rejected with a field-level
+ * ValidationError until its own seed lands it.
+ *
+ * The schema only checks shape — `name` and `url` are non-empty strings.
+ * URL shape, name regex, and uniqueness are cross-row / format checks
+ * that don't fit Zod cleanly; they live in `workers.ts`'s
+ * `validateWorkerEntries`, which the loader calls after `safeParse`.
  *
  * `parseWarrenServerFileConfig` returns a discriminated result instead
  * of throwing. The loader (load.ts) decides which failures become
@@ -17,7 +21,35 @@
 
 import { z } from "zod";
 
-export const WarrenServerFileConfigSchema = z.object({}).strict();
+/**
+ * One row of the `[[workers]]` array (pl-9ba1 step 8 / warren-272c).
+ *
+ * `name` is the operator-chosen handle that doubles as the row's primary
+ * key in warren's `workers` table (warren-b0a3) and the URL identity for
+ * `POST /workers/:name/drain` (warren-0f0c). `url` is the burrow worker's
+ * transport target — `unix:///path` or `http(s)://host:port` — parsed
+ * into a `Transport` post-schema by `parseWorkerUrl` (workers.ts).
+ */
+export const WorkerEntrySchema = z
+	.object({
+		name: z.string().min(1),
+		url: z.string().min(1),
+	})
+	.strict();
+
+export type WorkerEntry = z.infer<typeof WorkerEntrySchema>;
+
+/**
+ * `workers` is `optional()` rather than `default([])` so a TOML file with
+ * no `[[workers]]` block round-trips back as `{}` rather than
+ * `{ workers: [] }`. Both shapes mean the same thing to the boot path —
+ * zero workers, fall back to env-driven `BurrowClientPool.fromEnv`.
+ */
+export const WarrenServerFileConfigSchema = z
+	.object({
+		workers: z.array(WorkerEntrySchema).optional(),
+	})
+	.strict();
 
 export type WarrenServerFileConfig = z.infer<typeof WarrenServerFileConfigSchema>;
 

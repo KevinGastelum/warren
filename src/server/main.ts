@@ -36,6 +36,10 @@ import {
 	loadRunBranchPrefixFromEnv,
 	RunEventBroker,
 } from "../runs/index.ts";
+import {
+	loadWarrenServerConfigFromFile,
+	requireSharedBurrowToken,
+} from "../server-config/index.ts";
 import { loadTriggerSchedulerConfigFromEnv } from "../triggers/index.ts";
 import { createWarrenConfigCache } from "../warren-config/index.ts";
 import { NO_AUTH, resolveAuth } from "./auth.ts";
@@ -73,18 +77,31 @@ export async function bootServer(opts: BootServerOptions = {}): Promise<WarrenSe
 
 	const db = await openDatabase({ path: serverConfig.dbPath });
 	const repos = createRepos(db);
-	// BurrowClientPool replaces the old `BurrowClient.fromEnv()` singleton
-	// (warren-41a2 / pl-9ba1 step 3). Today's zero-config deploy materializes
-	// a single 'local' worker from WARREN_BURROW_* env vars; step 7 will add
-	// `[workers]` config so multi-worker deploys register additional entries.
-	// `pool.singleton()` is back-compat scaffolding: bridges / scheduler /
-	// spawnRun consume the legacy `burrowClient` variable until steps 4 and 5
-	// route them through `placeFor` / `clientFor`.
-	const burrowClientPool = BurrowClientPool.fromEnv({
-		env,
-		repos,
-		...(opts.now !== undefined ? { now: opts.now } : {}),
-	});
+
+	// Load the operator-facing TOML config (pl-9ba1 step 7 / warren-3909).
+	// `workers` is `[]` when `[workers]` is absent — the zero-config path
+	// still materializes a single synthetic `local` worker from
+	// WARREN_BURROW_* env vars (acceptance #1: identical behavior). When
+	// `[workers]` is declared, the file-driven `fromConfig` factory takes
+	// over and acceptance #8 requires the shared bearer token to be set.
+	const fileConfig = await loadWarrenServerConfigFromFile({ env });
+	const burrowClientPool =
+		fileConfig.workers.length > 0
+			? BurrowClientPool.fromConfig({
+					repos,
+					workers: fileConfig.workers,
+					token: requireSharedBurrowToken(env),
+					...(opts.now !== undefined ? { now: opts.now } : {}),
+				})
+			: BurrowClientPool.fromEnv({
+					env,
+					repos,
+					...(opts.now !== undefined ? { now: opts.now } : {}),
+				});
+	// `pool.singleton()` is back-compat scaffolding: bridges / steer /
+	// cancel / the boot probe still consume the legacy `burrowClient`
+	// variable. Single-worker `[workers]` configs work today; multi-worker
+	// boot will throw here until those consumers migrate to `clientFor`.
 	const burrowClient = burrowClientPool.singleton();
 	const broker = new RunEventBroker();
 
@@ -92,6 +109,12 @@ export async function bootServer(opts: BootServerOptions = {}): Promise<WarrenSe
 		{ dbPath: serverConfig.dbPath, transport: serverConfig.transport },
 		"warren server starting",
 	);
+	if (fileConfig.path !== null) {
+		logger.info(
+			{ path: fileConfig.path, workers: fileConfig.workers.length },
+			"loaded warren.toml",
+		);
+	}
 
 	// Seed built-in agents (warren-d3e9). Idempotent: existing rows
 	// (whether seeded by an earlier boot or upserted by a refresh of a

@@ -124,17 +124,104 @@ describe("loadWarrenServerConfigFromFile", () => {
 		}
 	});
 
-	test("unknown top-level key → ValidationError (strict schema rejects until step 8)", async () => {
-		// Until pl-9ba1 step 8 / warren-272c adds the `[workers]` block to
-		// the schema, ANY top-level key (including `workers`) must be
-		// rejected. This locks in the scaffolding contract so step 8 lands
-		// the field rather than accidentally inheriting passthrough.
+	test("unknown top-level key → ValidationError (strict schema rejects passthrough)", async () => {
 		await expect(
 			loadWarrenServerConfigFromFile({
 				env: { [WARREN_CONFIG_FILE_ENV]: CONFIG_PATH },
-				...fs({ [CONFIG_PATH]: '[workers]\nname = "a"\n' }),
+				...fs({ [CONFIG_PATH]: "banana = 1\n" }),
 			}),
 		).rejects.toBeInstanceOf(ValidationError);
+	});
+
+	test("[[workers]] block parses into ParsedWorkerEntry[] with transports", async () => {
+		const result = await loadWarrenServerConfigFromFile({
+			env: { [WARREN_CONFIG_FILE_ENV]: CONFIG_PATH },
+			...fs({
+				[CONFIG_PATH]: [
+					"[[workers]]",
+					'name = "alpha"',
+					'url = "http://alpha.local:9410"',
+					"",
+					"[[workers]]",
+					'name = "beta"',
+					'url = "unix:///var/run/burrow-beta.sock"',
+					"",
+				].join("\n"),
+			}),
+		});
+		expect(result.workers).toEqual([
+			{
+				name: "alpha",
+				url: "http://alpha.local:9410",
+				transport: { kind: "tcp", hostname: "alpha.local", port: 9410 },
+			},
+			{
+				name: "beta",
+				url: "unix:///var/run/burrow-beta.sock",
+				transport: { kind: "unix", path: "/var/run/burrow-beta.sock" },
+			},
+		]);
+	});
+
+	test("no [[workers]] block → workers is an empty array", async () => {
+		const result = await loadWarrenServerConfigFromFile({
+			env: { [WARREN_CONFIG_FILE_ENV]: CONFIG_PATH },
+			...fs({ [CONFIG_PATH]: "" }),
+		});
+		expect(result.workers).toEqual([]);
+	});
+
+	test("duplicate worker name → ValidationError citing workers[i].name", async () => {
+		try {
+			await loadWarrenServerConfigFromFile({
+				env: { [WARREN_CONFIG_FILE_ENV]: CONFIG_PATH },
+				...fs({
+					[CONFIG_PATH]: [
+						"[[workers]]",
+						'name = "alpha"',
+						'url = "http://a:1"',
+						"[[workers]]",
+						'name = "alpha"',
+						'url = "http://b:2"',
+					].join("\n"),
+				}),
+			});
+			throw new Error("expected throw");
+		} catch (err) {
+			expect(err).toBeInstanceOf(ValidationError);
+			expect((err as Error).message).toMatch(/workers\[1\]\.name/);
+			expect((err as Error).message).toMatch(/duplicated/);
+		}
+	});
+
+	test("invalid worker URL → ValidationError citing workers[i].url", async () => {
+		try {
+			await loadWarrenServerConfigFromFile({
+				env: { [WARREN_CONFIG_FILE_ENV]: CONFIG_PATH },
+				...fs({
+					[CONFIG_PATH]: ["[[workers]]", 'name = "alpha"', 'url = "ftp://nope"'].join("\n"),
+				}),
+			});
+			throw new Error("expected throw");
+		} catch (err) {
+			expect(err).toBeInstanceOf(ValidationError);
+			expect((err as Error).message).toMatch(/workers\[0\]\.url/);
+		}
+	});
+
+	test("worker name with invalid character → ValidationError citing workers[i].name", async () => {
+		try {
+			await loadWarrenServerConfigFromFile({
+				env: { [WARREN_CONFIG_FILE_ENV]: CONFIG_PATH },
+				...fs({
+					[CONFIG_PATH]: ["[[workers]]", 'name = "has space"', 'url = "http://a:1"'].join("\n"),
+				}),
+			});
+			throw new Error("expected throw");
+		} catch (err) {
+			expect(err).toBeInstanceOf(ValidationError);
+			expect((err as Error).message).toMatch(/workers\[0\]\.name/);
+		}
 	});
 
 	test("readFile throws (e.g. EACCES) → ValidationError with cause", async () => {

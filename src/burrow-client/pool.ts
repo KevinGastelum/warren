@@ -41,7 +41,7 @@ import { ValidationError, WarrenError } from "../core/errors.ts";
 import type { Repos } from "../db/repos/index.ts";
 import { placeForBurrow, placeForProject } from "../runs/placement.ts";
 import { BurrowClient } from "./client.ts";
-import { type EnvLike, loadBurrowClientConfigFromEnv } from "./config.ts";
+import { type BurrowClientConfig, type EnvLike, loadBurrowClientConfigFromEnv } from "./config.ts";
 
 /**
  * Worker name for the synthetic worker that backs today's single-container
@@ -87,6 +87,35 @@ export interface BurrowClientPoolFromEnvOptions {
 	readonly now?: () => Date;
 }
 
+/**
+ * One `[[workers]]` entry post-validation: `name` + `url` from the TOML
+ * config plus the parsed burrow `Transport`. The server-config loader
+ * (src/server-config/workers.ts) returns this shape so the pool factory
+ * doesn't re-parse the URL.
+ */
+export interface ConfiguredWorker {
+	readonly name: string;
+	readonly url: string;
+	readonly transport: Transport;
+}
+
+export interface BurrowClientPoolFromConfigOptions {
+	readonly repos: Repos;
+	/** Parsed `[[workers]]` rows; must contain at least one entry. */
+	readonly workers: readonly ConfiguredWorker[];
+	/**
+	 * Bearer token shared across the pool (acceptance #8 of pl-9ba1). One
+	 * value for every worker — per-worker tokens were rejected as plan
+	 * alternative #3. `requireSharedBurrowToken` (src/server-config/
+	 * workers.ts) is the typical producer; boot validates before calling.
+	 */
+	readonly token: string;
+	/** Override `fetch` (forwarded to each constructed `BurrowClient`). */
+	readonly fetch?: typeof fetch;
+	/** Override `Date.now()` for each worker's `addedAt`. */
+	readonly now?: () => Date;
+}
+
 export class BurrowClientPool {
 	private readonly clients = new Map<string, BurrowClient>();
 	private readonly deps: BurrowClientPoolDeps;
@@ -118,9 +147,48 @@ export class BurrowClientPool {
 	}
 
 	/**
-	 * Bind a `BurrowClient` to a worker name. Step 7 ([workers] config loader)
-	 * is the production caller; tests use this directly to wire a stub client
-	 * per worker.
+	 * Boot a multi-worker pool from a parsed `[workers]` config (pl-9ba1
+	 * step 8 / warren-272c). Upserts every row into `workers` (preserving
+	 * probe-derived state on re-boot) and registers each as a
+	 * `BurrowClient` bound to the supplied shared bearer token.
+	 *
+	 * The synthetic `local` worker that `fromEnv` materializes is NOT
+	 * created here — when an operator declares `[workers]`, that array
+	 * defines the complete pool. Removed workers leave orphaned rows on
+	 * disk by design (plan risk #1); `warren doctor` surfaces them as
+	 * `worker_missing` and operators reconcile explicitly.
+	 *
+	 * Caller contract: `workers` must be non-empty. An empty array is a
+	 * boot-flow bug (the boot path picks `fromEnv` for zero-config) and
+	 * throws here rather than silently producing a pool that fails every
+	 * `placeFor` with `NoEligibleWorkerError`.
+	 */
+	static fromConfig(opts: BurrowClientPoolFromConfigOptions): BurrowClientPool {
+		if (opts.workers.length === 0) {
+			throw new ValidationError("BurrowClientPool.fromConfig requires at least one worker", {
+				recoveryHint: "use BurrowClientPool.fromEnv for the zero-config path",
+			});
+		}
+		const pool = new BurrowClientPool({ repos: opts.repos });
+		for (const w of opts.workers) {
+			opts.repos.workers.upsert({
+				name: w.name,
+				url: w.url,
+				...(opts.now !== undefined ? { now: opts.now() } : {}),
+			});
+			const config: BurrowClientConfig = { transport: w.transport, token: opts.token };
+			const client = new BurrowClient(
+				opts.fetch !== undefined ? { config, fetch: opts.fetch } : { config },
+			);
+			pool.register(w.name, client);
+		}
+		return pool;
+	}
+
+	/**
+	 * Bind a `BurrowClient` to a worker name. `fromEnv` / `fromConfig` are
+	 * the production callers; tests use this directly to wire a stub
+	 * client per worker.
 	 */
 	register(workerName: string, client: BurrowClient): void {
 		if (this.clients.has(workerName)) {
