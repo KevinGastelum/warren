@@ -109,6 +109,15 @@ export const runs = sqliteTable(
 		projectId: text("project_id").references(() => projects.id, { onDelete: "set null" }),
 		burrowId: text("burrow_id"),
 		burrowRunId: text("burrow_run_id"),
+		// Denormalized worker placement (warren-135b / pl-9ba1 step 2).
+		// Copy of `burrows.worker_id` written at run-create time so streaming /
+		// cancel / steer paths can route to the owning worker without a join.
+		// Plain text (no FK to `workers.name`) because the zero-config single-
+		// worker deploy uses a synthetic local worker that has no row in the
+		// `workers` table. Nullable for back-compat with rows written before
+		// this column landed; new rows always set it once `BurrowClientPool`
+		// (step 3) and the spawn wiring (step 4) land.
+		workerId: text("worker_id"),
 		renderedAgentJson: text("rendered_agent_json", { mode: "json" }).notNull(),
 		state: text("state", { enum: RUN_STATES }).notNull(),
 		failureReason: text("failure_reason", { enum: RUN_FAILURE_REASONS }),
@@ -137,6 +146,7 @@ export const runs = sqliteTable(
 		index("runs_state_idx").on(t.state),
 		index("runs_project_started_idx").on(t.projectId, sql`${t.startedAt} DESC`),
 		index("runs_agent_started_idx").on(t.agentName, sql`${t.startedAt} DESC`),
+		index("runs_worker_state_idx").on(t.workerId, t.state),
 	],
 );
 
@@ -216,6 +226,39 @@ export const workers = sqliteTable("workers", {
 	addedAt: text("added_at").notNull(),
 });
 
+/**
+ * Per-burrow worker assignment (warren-135b / pl-9ba1 step 2).
+ *
+ * Source of truth for `{burrow_id → worker_id}`. One row per burrow warren
+ * has provisioned; written at burrow-create time (step 4 wires the spawn
+ * flow), read by `clientFor({burrowId})` on every sticky-by-burrow request
+ * (stream / cancel / steer / events tail) so warren routes to the worker
+ * that physically holds the sandbox + burrow-side SQLite row.
+ *
+ * `runs.worker_id` is a denormalized copy of this column written at
+ * run-create time so streaming paths don't have to join.
+ *
+ * `worker_id` is plain text without a FK to `workers.name` because the
+ * zero-config single-worker deploy uses a synthetic local worker that has
+ * no row in `workers` (back-compat with today's `WARREN_BURROW_*` env-var
+ * deploys; the loader in step 7 materializes rows only when a `[workers]`
+ * block is configured).
+ *
+ * Sticky-by-burrow is the design (plan risk #5): if the row's `worker_id`
+ * points at an `unreachable` worker, `placeForBurrow` fails loudly rather
+ * than silently migrating. Operators drain + remove a dead worker to clear
+ * orphans (`warren doctor` will surface them as `worker_missing`).
+ */
+export const burrows = sqliteTable(
+	"burrows",
+	{
+		id: text("id").primaryKey(),
+		workerId: text("worker_id").notNull(),
+		addedAt: text("added_at").notNull(),
+	},
+	(t) => [index("burrows_worker_idx").on(t.workerId)],
+);
+
 export type AgentRow = typeof agents.$inferSelect;
 export type AgentInsert = typeof agents.$inferInsert;
 export type ProjectRow = typeof projects.$inferSelect;
@@ -228,6 +271,8 @@ export type TriggerRow = typeof triggers.$inferSelect;
 export type TriggerInsert = typeof triggers.$inferInsert;
 export type WorkerRow = typeof workers.$inferSelect;
 export type WorkerInsert = typeof workers.$inferInsert;
+export type BurrowRow = typeof burrows.$inferSelect;
+export type BurrowInsert = typeof burrows.$inferInsert;
 
 /**
  * Build the composite PK from a project + trigger pair. The colon separator

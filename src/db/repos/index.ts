@@ -5,6 +5,7 @@
 
 import type { WarrenDb } from "../client.ts";
 import { AgentsRepo } from "./agents.ts";
+import { BurrowsRepo } from "./burrows.ts";
 import { EventsRepo } from "./events.ts";
 import { ProjectsRepo } from "./projects.ts";
 import { RunsRepo } from "./runs.ts";
@@ -18,6 +19,7 @@ export interface Repos {
 	events: EventsRepo;
 	triggers: TriggersRepo;
 	workers: WorkersRepo;
+	burrows: BurrowsRepo;
 }
 
 export function createRepos(db: WarrenDb): Repos {
@@ -28,7 +30,8 @@ export function createRepos(db: WarrenDb): Repos {
 		events: new EventsRepo(db.drizzle),
 		triggers: new TriggersRepo(db.drizzle),
 		workers: new WorkersRepo(db.drizzle),
+		burrows: new BurrowsRepo(db.drizzle),
 	};
 }
 
-export { AgentsRepo, EventsRepo, ProjectsRepo, RunsRepo, TriggersRepo, WorkersRepo };
+export { AgentsRepo, BurrowsRepo, EventsRepo, ProjectsRepo, RunsRepo, TriggersRepo, WorkersRepo };

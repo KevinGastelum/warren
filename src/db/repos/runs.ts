@@ -10,7 +10,7 @@
  * the burrow IDs are written back once we have them.
  */
 
-import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { NotFoundError, StateTransitionError, ValidationError } from "../../core/errors.ts";
 import { generateId } from "../../core/ids.ts";
 import type { DrizzleDb } from "../client.ts";
@@ -45,12 +45,21 @@ export interface CreateRunInput {
 	trigger: string;
 	burrowId?: string | null;
 	burrowRunId?: string | null;
+	/**
+	 * Worker that will host the burrow for this run (warren-135b). The
+	 * spawn flow (pl-9ba1 step 4) resolves this via `placeFor` before
+	 * provisioning and writes the denormalized id here so streaming /
+	 * cancel / steer paths can route without joining `burrows`. Null on
+	 * rows written before pl-9ba1 step 4 wired this in.
+	 */
+	workerId?: string | null;
 	now?: Date;
 }
 
 export interface AttachBurrowInput {
 	burrowId?: string;
 	burrowRunId?: string;
+	workerId?: string;
 }
 
 export interface AttachStatsInput {
@@ -71,6 +80,7 @@ export class RunsRepo {
 			projectId: input.projectId,
 			burrowId: input.burrowId ?? null,
 			burrowRunId: input.burrowRunId ?? null,
+			workerId: input.workerId ?? null,
 			renderedAgentJson: input.renderedAgentJson,
 			state: "queued",
 			failureReason: null,
@@ -140,13 +150,20 @@ export class RunsRepo {
 	 * Both fields are optional, but at least one must be set.
 	 */
 	attachBurrow(id: string, input: AttachBurrowInput): RunRow {
-		if (input.burrowId === undefined && input.burrowRunId === undefined) {
-			throw new ValidationError("attachBurrow requires at least one of burrowId or burrowRunId");
+		if (
+			input.burrowId === undefined &&
+			input.burrowRunId === undefined &&
+			input.workerId === undefined
+		) {
+			throw new ValidationError(
+				"attachBurrow requires at least one of burrowId, burrowRunId, or workerId",
+			);
 		}
 		const current = this.require(id);
-		const patch: { burrowId?: string; burrowRunId?: string } = {};
+		const patch: { burrowId?: string; burrowRunId?: string; workerId?: string } = {};
 		if (input.burrowId !== undefined) patch.burrowId = input.burrowId;
 		if (input.burrowRunId !== undefined) patch.burrowRunId = input.burrowRunId;
+		if (input.workerId !== undefined) patch.workerId = input.workerId;
 		this.db.update(runs).set(patch).where(eq(runs.id, id)).run();
 		return { ...current, ...patch };
 	}
@@ -220,6 +237,53 @@ export class RunsRepo {
 		const current = this.require(id);
 		this.db.update(runs).set({ prUrl }).where(eq(runs.id, id)).run();
 		return { ...current, prUrl };
+	}
+
+	/**
+	 * Project-affinity probe for `placeFor` (warren-135b / pl-9ba1 step 2):
+	 * the most-recent run that succeeded against this project AND has a
+	 * recorded `workerId`. Returns null if the project has no successful
+	 * runs yet, or if no successful run was tagged with a worker (rows
+	 * written before pl-9ba1 step 4 wired this in). Newest-first by
+	 * `endedAt` so a recent run wins over an older one even if the older
+	 * one started later in startedAt order.
+	 */
+	mostRecentSucceededWithWorker(projectId: string): RunRow | null {
+		return (
+			this.db
+				.select()
+				.from(runs)
+				.where(
+					and(eq(runs.projectId, projectId), eq(runs.state, "succeeded"), isNotNull(runs.workerId)),
+				)
+				.orderBy(desc(runs.endedAt), asc(runs.id))
+				.limit(1)
+				.get() ?? null
+		);
+	}
+
+	/**
+	 * In-flight load per worker for the least-loaded leg of `placeFor`
+	 * (warren-135b / pl-9ba1 step 2). Counts `queued` + `running` runs
+	 * grouped by `workerId`. Rows with a null `workerId` (legacy or
+	 * unplaced) are excluded. Result is keyed by worker name; workers
+	 * with zero in-flight runs are absent (the caller defaults to 0).
+	 */
+	countInflightByWorker(): Map<string, number> {
+		const rows = this.db
+			.select({
+				workerId: runs.workerId,
+				count: sql<number>`count(*)`.as("count"),
+			})
+			.from(runs)
+			.where(and(isNotNull(runs.workerId), inArray(runs.state, ["queued", "running"])))
+			.groupBy(runs.workerId)
+			.all();
+		const out = new Map<string, number>();
+		for (const r of rows) {
+			if (r.workerId !== null) out.set(r.workerId, Number(r.count));
+		}
+		return out;
 	}
 
 	/**
