@@ -63,10 +63,18 @@ export interface BridgeLogger {
 }
 
 /**
- * Session-cumulative cost + token snapshot from pi's `get_session_stats`
- * RPC (warren-a7dc, SPEC §pi). Pi reports cost in USD computed against the
- * same models.json it dispatched against; warren persists the raw number
- * rather than re-pricing tokens itself (plan alternative #5).
+ * Session-cumulative cost + token snapshot (warren-a7dc, SPEC §pi). Pi
+ * v0.74 reports cost in USD computed against the same models.json it
+ * dispatched against; warren persists the raw number rather than
+ * re-pricing tokens itself (plan alternative #5).
+ *
+ * Pi emits this shape inline on every `turn_end` envelope (and the
+ * matching assistant `message_end`) — see burrow's
+ * `src/runtime/parsers/__golden__/pi-v0.74.0-anthropic-*.jsonl`. The
+ * bridge's preferred path is to extract these from the event stream it
+ * already consumes (warren-17a4); the PiStatsClient out-of-band RPC
+ * surface below remains as an override for runtimes that surface stats
+ * only via an external fetch.
  */
 export interface SessionStats {
 	readonly costUsd: number;
@@ -77,16 +85,18 @@ export interface SessionStats {
 }
 
 /**
- * Transport-agnostic hook for `get_session_stats`. The bridge calls
- * `fetch` at run-start (baseline) and run-end (terminal), then persists
- * the delta via `RunsRepo.attachStats`. Returning `null` signals
+ * Transport-agnostic hook for an out-of-band stats fetch. The bridge
+ * calls `fetch` at run-start (baseline) and run-end (terminal), then
+ * persists the delta via `RunsRepo.attachStats`. Returning `null` signals
  * "stats unavailable" (e.g. RPC channel closed, agent isn't pi) and is
  * treated as best-effort — the column stays null, the bridge keeps going.
  * Throws are caught + logged; same outcome.
  *
- * Wiring is the registry's concern (src/server/bridges.ts): pass the
- * client only for pi-runtime runs so non-pi bridges skip the snapshot
- * entirely.
+ * Most pi runs do NOT need this — the bridge extracts cost from pi's
+ * inline `turn_end` envelopes (warren-17a4) without any extra wiring.
+ * `PiStatsClient` is the override for sources warren can't observe
+ * in-stream (custom dispatchers, harnessed test fixtures, future
+ * runtimes). When both paths produce data, the explicit client wins.
  */
 export interface PiStatsClient {
 	fetch(burrowRunId: string, signal: AbortSignal): Promise<SessionStats | null>;
@@ -155,11 +165,16 @@ export async function bridgeRunStream(input: BridgeRunStreamInput): Promise<Brid
 	let errored = false;
 	let claimed = false;
 	let terminalDetected: { outcome: RunTerminalState } | undefined;
-	// pi cost tracking (warren-a7dc). Baseline is fetched once on first
-	// observed event; terminal is fetched on the first `agent_end` we see
-	// (or, defensively, on terminalDetected). Both are best-effort.
+	// pi cost tracking (warren-a7dc, warren-17a4). Two paths:
+	//   1. In-stream extraction (default): accumulate `turn_end` usage as
+	//      events flow through the bridge. Persisted on terminal.
+	//   2. Out-of-band PiStatsClient (override): fetched at baseline +
+	//      terminal, delta persisted. Used when the wire format doesn't
+	//      carry usage (declarative stubs, custom dispatchers).
+	// Both paths are best-effort; failures leave the columns null.
 	let statsBaseline: Promise<SessionStats | null> | undefined;
 	let statsPersisted = false;
+	const piUsage: SessionStatsAccumulator = newSessionStatsAccumulator();
 
 	try {
 		for await (const event of source(ctrl.signal)) {
@@ -196,28 +211,11 @@ export async function bridgeRunStream(input: BridgeRunStreamInput): Promise<Brid
 			written += 1;
 			broker.publish(runId, row);
 
-			if (!statsPersisted && input.piStats !== undefined && isPiAgentEnd(event)) {
-				statsPersisted = true;
-				await persistPiStatsDelta({
-					piStats: input.piStats,
-					burrowRunId,
-					runId,
-					repos,
-					baseline: statsBaseline,
-					signal: ctrl.signal,
-					logger: input.logger,
-				});
-			}
+			accumulatePiUsage(piUsage, event);
 
-			const outcome = detectRuntimeTerminal(event);
-			if (outcome !== null) {
-				terminalDetected = { outcome };
-				input.logger?.info?.(
-					{ runId, burrowRunId, outcome, seq: event.seq },
-					"bridge observed runtime-terminal event; reap will finalize",
-				);
-				if (!statsPersisted && input.piStats !== undefined) {
-					statsPersisted = true;
+			if (!statsPersisted && isPiAgentEnd(event)) {
+				statsPersisted = true;
+				if (input.piStats !== undefined) {
 					await persistPiStatsDelta({
 						piStats: input.piStats,
 						burrowRunId,
@@ -227,6 +225,45 @@ export async function bridgeRunStream(input: BridgeRunStreamInput): Promise<Brid
 						signal: ctrl.signal,
 						logger: input.logger,
 					});
+				} else {
+					persistInStreamPiUsage({
+						usage: piUsage,
+						runId,
+						burrowRunId,
+						repos,
+						logger: input.logger,
+					});
+				}
+			}
+
+			const outcome = detectRuntimeTerminal(event);
+			if (outcome !== null) {
+				terminalDetected = { outcome };
+				input.logger?.info?.(
+					{ runId, burrowRunId, outcome, seq: event.seq },
+					"bridge observed runtime-terminal event; reap will finalize",
+				);
+				if (!statsPersisted) {
+					statsPersisted = true;
+					if (input.piStats !== undefined) {
+						await persistPiStatsDelta({
+							piStats: input.piStats,
+							burrowRunId,
+							runId,
+							repos,
+							baseline: statsBaseline,
+							signal: ctrl.signal,
+							logger: input.logger,
+						});
+					} else {
+						persistInStreamPiUsage({
+							usage: piUsage,
+							runId,
+							burrowRunId,
+							repos,
+							logger: input.logger,
+						});
+					}
 				}
 				break;
 			}
@@ -451,6 +488,130 @@ async function persistPiStatsDelta(input: PersistPiStatsInput): Promise<void> {
 				err: err instanceof Error ? err.message : String(err),
 			},
 			"attachStats threw; cost columns may be inconsistent",
+		);
+	}
+}
+
+/**
+ * Mutable accumulator for pi `turn_end` usage observed in-stream. Pi
+ * emits per-turn totals (not session-cumulative within a single run with
+ * `--no-session`), so the bridge sums turns to land at the run total.
+ * `seen` distinguishes "no pi usage observed yet" from "observed zero
+ * cost" — the persist step skips the write entirely when seen=false so
+ * non-pi runs keep parity with claude-code (columns stay null).
+ */
+interface SessionStatsAccumulator {
+	seen: boolean;
+	costUsd: number;
+	tokensInput: number;
+	tokensOutput: number;
+	tokensCacheRead: number;
+	tokensCacheWrite: number;
+}
+
+function newSessionStatsAccumulator(): SessionStatsAccumulator {
+	return {
+		seen: false,
+		costUsd: 0,
+		tokensInput: 0,
+		tokensOutput: 0,
+		tokensCacheRead: 0,
+		tokensCacheWrite: 0,
+	};
+}
+
+/**
+ * Extract pi's per-turn usage from a `turn_end` envelope and add it to
+ * the accumulator. Pi's per-message usage (in `message_end`) double-counts
+ * across the turn because each assistant message duplicates the
+ * conversation totals, so we read only `turn_end`'s `message.usage.cost`
+ * (see burrow `src/runtime/parsers/__golden__/pi-v0.74.0-anthropic-*.jsonl`).
+ *
+ * Defensive: unknown shapes leave the accumulator untouched. A future
+ * pi version that grows new envelope fields can't crash the bridge —
+ * the worst case is "we miss this run's cost", same as no-event.
+ */
+function accumulatePiUsage(acc: SessionStatsAccumulator, event: RunEvent): void {
+	if (event.kind !== "state_change") return;
+	if (event.stream !== "system") return;
+	const payload = event.payload;
+	if (payload === null || typeof payload !== "object") return;
+	const env = payload as Record<string, unknown>;
+	if (env.type !== "turn_end") return;
+	const message = env.message;
+	if (message === null || typeof message !== "object") return;
+	const usage = (message as Record<string, unknown>).usage;
+	if (usage === null || typeof usage !== "object") return;
+	const u = usage as Record<string, unknown>;
+	const cost = u.cost;
+	const costTotal =
+		cost !== null && typeof cost === "object"
+			? toNumber((cost as Record<string, unknown>).total)
+			: null;
+	const tokensInput = toNumber(u.input);
+	const tokensOutput = toNumber(u.output);
+	const tokensCacheRead = toNumber(u.cacheRead);
+	const tokensCacheWrite = toNumber(u.cacheWrite);
+	// Require at least the cost total OR an input/output token count
+	// before we count the envelope as "real" usage — otherwise a malformed
+	// turn_end with a structurally-present but empty usage block would
+	// mark the run as pi-shaped and persist all-zeros.
+	if (costTotal === null && tokensInput === null && tokensOutput === null) return;
+	acc.seen = true;
+	if (costTotal !== null) acc.costUsd += costTotal;
+	if (tokensInput !== null) acc.tokensInput += tokensInput;
+	if (tokensOutput !== null) acc.tokensOutput += tokensOutput;
+	if (tokensCacheRead !== null) acc.tokensCacheRead += tokensCacheRead;
+	if (tokensCacheWrite !== null) acc.tokensCacheWrite += tokensCacheWrite;
+}
+
+function toNumber(value: unknown): number | null {
+	return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+interface PersistInStreamUsageInput {
+	readonly usage: SessionStatsAccumulator;
+	readonly runId: string;
+	readonly burrowRunId: string;
+	readonly repos: Repos;
+	readonly logger?: BridgeLogger;
+}
+
+/**
+ * Persist in-stream-accumulated pi usage via `RunsRepo.attachStats`.
+ * Skips when no `turn_end` envelope was ever observed (non-pi run, or
+ * pi-but-no-turn-completed) so cost columns stay null with parity to
+ * claude-code. attachStats throws on storage errors; we log + swallow
+ * to match the PiStatsClient path's best-effort posture.
+ */
+function persistInStreamPiUsage(input: PersistInStreamUsageInput): void {
+	if (!input.usage.seen) return;
+	try {
+		input.repos.runs.attachStats(input.runId, {
+			costUsd: input.usage.costUsd,
+			tokensInput: input.usage.tokensInput,
+			tokensOutput: input.usage.tokensOutput,
+			tokensCacheRead: input.usage.tokensCacheRead,
+			tokensCacheWrite: input.usage.tokensCacheWrite,
+		});
+		input.logger?.info?.(
+			{
+				runId: input.runId,
+				burrowRunId: input.burrowRunId,
+				costUsd: input.usage.costUsd,
+				tokensInput: input.usage.tokensInput,
+				tokensOutput: input.usage.tokensOutput,
+			},
+			"persisted pi in-stream usage totals",
+		);
+	} catch (err) {
+		input.logger?.warn?.(
+			{
+				runId: input.runId,
+				burrowRunId: input.burrowRunId,
+				err: err instanceof Error ? err.message : String(err),
+			},
+			"attachStats threw on in-stream pi usage; cost columns may stay null",
 		);
 	}
 }

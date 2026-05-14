@@ -595,6 +595,183 @@ describe("bridgeRunStream", () => {
 		expect(terminalCalled).toBe(true);
 	});
 
+	// In-stream pi cost extraction (warren-17a4). Pi v0.74 emits
+	// `turn_end` envelopes carrying `message.usage.{input,output,cacheRead,
+	// cacheWrite,cost.total}` — see burrow's
+	// `src/runtime/parsers/__golden__/pi-v0.74.0-anthropic-*.jsonl`. The
+	// bridge accumulates these as events flow through and persists the
+	// run-level totals at `agent_end`, no PiStatsClient required.
+	function piTurnEnd(
+		burrowRunId: string,
+		seq: number,
+		usage: {
+			input: number;
+			output: number;
+			cacheRead?: number;
+			cacheWrite?: number;
+			costTotal: number;
+		},
+	): RunEvent {
+		return evt(burrowRunId, seq, {
+			kind: "state_change",
+			stream: "system",
+			payload: {
+				type: "turn_end",
+				message: {
+					role: "assistant",
+					usage: {
+						input: usage.input,
+						output: usage.output,
+						cacheRead: usage.cacheRead ?? 0,
+						cacheWrite: usage.cacheWrite ?? 0,
+						cost: {
+							input: 0,
+							output: 0,
+							cacheRead: 0,
+							cacheWrite: 0,
+							total: usage.costTotal,
+						},
+					},
+				},
+			},
+		});
+	}
+
+	test("in-stream: single-turn turn_end usage lands in cost/token columns at agent_end", async () => {
+		await bridgeRunStream({
+			runId,
+			burrowRunId,
+			repos,
+			broker,
+			burrowClient: makeBurrowClient(),
+			source: source([
+				evt(burrowRunId, 1, { kind: "agent_start" }),
+				piTurnEnd(burrowRunId, 2, { input: 446, output: 44, costTotal: 0.000666 }),
+				piAgentEnd(burrowRunId, 3),
+			]),
+		});
+		const after = repos.runs.require(runId);
+		expect(after.costUsd).toBeCloseTo(0.000666);
+		expect(after.tokensInput).toBe(446);
+		expect(after.tokensOutput).toBe(44);
+		expect(after.tokensCacheRead).toBe(0);
+		expect(after.tokensCacheWrite).toBe(0);
+	});
+
+	test("in-stream: multi-turn turn_end usage accumulates across turns", async () => {
+		await bridgeRunStream({
+			runId,
+			burrowRunId,
+			repos,
+			broker,
+			burrowClient: makeBurrowClient(),
+			source: source([
+				evt(burrowRunId, 1, { kind: "agent_start" }),
+				piTurnEnd(burrowRunId, 2, { input: 1658, output: 128, costTotal: 0.002298 }),
+				piTurnEnd(burrowRunId, 3, { input: 1812, output: 56, costTotal: 0.002092 }),
+				piAgentEnd(burrowRunId, 4),
+			]),
+		});
+		const after = repos.runs.require(runId);
+		expect(after.costUsd).toBeCloseTo(0.00439);
+		expect(after.tokensInput).toBe(3470);
+		expect(after.tokensOutput).toBe(184);
+	});
+
+	test("in-stream: no turn_end events leaves columns null (claude-code parity)", async () => {
+		await bridgeRunStream({
+			runId,
+			burrowRunId,
+			repos,
+			broker,
+			burrowClient: makeBurrowClient(),
+			source: source([evt(burrowRunId, 1, { kind: "agent_start" }), piAgentEnd(burrowRunId, 2)]),
+		});
+		const after = repos.runs.require(runId);
+		expect(after.costUsd).toBeNull();
+		expect(after.tokensInput).toBeNull();
+	});
+
+	test("in-stream: PiStatsClient override wins over in-stream usage", async () => {
+		const piStats: PiStatsClient = {
+			async fetch() {
+				return {
+					costUsd: 9.99,
+					tokensInput: 1,
+					tokensOutput: 1,
+					tokensCacheRead: 0,
+					tokensCacheWrite: 0,
+				};
+			},
+		};
+		await bridgeRunStream({
+			runId,
+			burrowRunId,
+			repos,
+			broker,
+			burrowClient: makeBurrowClient(),
+			piStats,
+			source: source([
+				piTurnEnd(burrowRunId, 1, { input: 500, output: 200, costTotal: 0.123 }),
+				piAgentEnd(burrowRunId, 2),
+			]),
+		});
+		// PiStatsClient delta = terminal(9.99) − baseline(9.99) = 0. The
+		// explicit override takes precedence and overwrites whatever
+		// in-stream accumulation would have produced (0.123).
+		const after = repos.runs.require(runId);
+		expect(after.costUsd).toBeCloseTo(0);
+		expect(after.tokensInput).toBe(0);
+	});
+
+	test("in-stream: terminalDetected via claude-code result still persists pi usage if observed", async () => {
+		await bridgeRunStream({
+			runId,
+			burrowRunId,
+			repos,
+			broker,
+			burrowClient: makeBurrowClient(),
+			source: source([
+				piTurnEnd(burrowRunId, 1, { input: 100, output: 25, costTotal: 0.001 }),
+				evt(burrowRunId, 2, {
+					kind: "state_change",
+					stream: "system",
+					payload: { type: "result", subtype: "result", is_error: false },
+				}),
+			]),
+		});
+		// detectRuntimeTerminal fires on the `result` envelope (claude-code
+		// shape) — but the bridge has already accumulated a pi `turn_end`,
+		// so the in-stream fallback persists it before the bridge breaks.
+		const after = repos.runs.require(runId);
+		expect(after.costUsd).toBeCloseTo(0.001);
+		expect(after.tokensInput).toBe(100);
+	});
+
+	test("in-stream: turn_end with malformed usage is ignored (no row update)", async () => {
+		await bridgeRunStream({
+			runId,
+			burrowRunId,
+			repos,
+			broker,
+			burrowClient: makeBurrowClient(),
+			source: source([
+				// turn_end with no usage field at all — defensive shape from a
+				// hypothetical future pi version. Should not crash, and should
+				// not mark the run as having pi usage.
+				evt(burrowRunId, 1, {
+					kind: "state_change",
+					stream: "system",
+					payload: { type: "turn_end", message: { role: "assistant" } },
+				}),
+				piAgentEnd(burrowRunId, 2),
+			]),
+		});
+		const after = repos.runs.require(runId);
+		expect(after.costUsd).toBeNull();
+		expect(after.tokensInput).toBeNull();
+	});
+
 	test("bridge end calls broker.close so live subscribers return", async () => {
 		const sub = broker.subscribe(runId);
 		const out: number[] = [];
