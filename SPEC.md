@@ -3,7 +3,7 @@
 > A network of interconnected burrows. The control plane and UI for cloud-based custom agents that operate in isolation, self-manage, self-repair, and self-improve.
 
 **Status:** Design phase, V1 spec.
-**Last updated:** 2026-05-08.
+**Last updated:** 2026-05-13.
 **CLI:** `warren` / `wr` (TBD).
 **Package:** `@os-eco/warren` (TBD).
 
@@ -82,7 +82,6 @@ Warren is a thin coordinator — most of the value is in the runtime plus whiche
 
 - No multi-tenant auth, no per-user RBAC in V1. Single bearer token, one user. Multi-user identity via OIDC is a planned post-V1 addition (R-09).
 - No agent marketplace. Agents come from your own canopy repo.
-- No remote burrow workers in V1 — burrows run inside warren's container. The "single warren box is the concurrency ceiling" shape is acceptable for V1; remote workers are planned for V2 (R-12, design tracked in `burrow-c47a`). The warren↔burrow seam is already HTTP, so this is additive rather than a rewrite.
 - No laptop-driven `burrow up` against warren. The home server is the canonical V1 deploy.
 - No real-time collaboration. One UI, one user at a time.
 - No payment, no usage metering, no quota in V1. Per-user / per-project cost and concurrency guardrails are planned post-V1 (R-17).
@@ -239,6 +238,139 @@ cap_add: [SYS_ADMIN]
 ```
 
 Verified empirically on Docker 28.4 / Ubuntu 24.04. Same recipe applies to Fly.io machines.
+
+### 5.4 Multi-worker model
+
+Zero-config deployment is unchanged: one warren container, one
+in-container `burrow serve` over `/var/run/burrow.sock` (§5.1).
+Multi-worker is opt-in via a `[[workers]]` block in warren's server-level
+TOML config; when present, warren dispatches across N burrow workers
+(local-only or remote, across hosts) with the same per-run isolation
+contract as the single-worker path. The warren↔burrow seam is unchanged
+— every request still rides the typed `HttpClient` from `@os-eco/burrow`
+whose `Transport = unix | tcp` already covered both shapes. Multi-worker
+is registry + routing, not a protocol change.
+
+Cross-repo split: warren-side (this document) ships the worker registry,
+client pool, placement rules, fan-out reads, and admin endpoints.
+Burrow-side (non-loopback TCP bind safety, `POST /admin/drain`, OpenAPI
+updates, ROADMAP supersession) is tracked in burrow as `burrow-62ce` /
+`pl-cb3e`. The parent seed in this repo is `warren-6747`; the warren
+plan is `pl-9ba1`.
+
+**Registry.** Migration 0007 adds the `workers` table
+`(name PK, url, state, added_at)` with state machine
+`healthy | draining | unreachable`. Migration 0008 adds the warren-side
+`burrows` table `(id PK, worker_id NOT NULL, added_at)` plus
+`runs.worker_id` (denormalized from `burrows.worker_id` at run-create
+time so cancel / steer / stream routing skips the join). A single shared
+`BURROW_API_TOKEN` env var fronts the whole pool — bearer is not a
+per-worker column (rotation = one env-var update; per-worker tokens are
+deferred until a concrete multi-tenancy driver emerges, pl-9ba1
+alternative #3).
+
+**Pool.** `src/burrow-client/pool.ts` (`BurrowClientPool`) replaces the
+legacy `BurrowClient.fromEnv()` singleton. Holds
+`Map<workerName, BurrowClient>` and exposes two routing primitives:
+`placeFor({ projectId })` for new-burrow provisioning and
+`clientFor({ burrowId })` for everything else (cancel, steer, stream,
+per-resource reads). Two factories: `fromEnv` for the zero-config path
+synthesizes one `'local'` worker from `WARREN_BURROW_*` env vars;
+`fromConfig` takes the parsed `[[workers]]` entries plus the shared
+bearer and registers a `BurrowClient` per row with no local synthesis.
+`bootServer` picks the factory based on whether any `[[workers]]`
+entries loaded.
+
+**Placement** (`src/runs/placement.ts`):
+
+- *Sticky-by-burrow.* Streaming, cancel, steer, reap, and
+  runs-against-an-existing-burrow all resolve via
+  `pool.clientFor({ burrowId })` against the worker stored on the
+  `burrows` row. A `draining` worker keeps serving its existing burrows
+  until they finish; an `unreachable` worker fails loudly with
+  `StickyWorkerUnreachableError`. No silent migration — operators must
+  drain + remove a dead worker explicitly.
+- *New-burrow placement* is two-tier: (A) project-affinity — the worker
+  of the most recent succeeded run for the same `projectId`, honored
+  only if that worker is `healthy`. (B) least-loaded healthy worker by
+  in-flight `queued + running` count, alphabetical worker-name tiebreak.
+  Draining and unreachable workers are filtered before either tier.
+  `NoEligibleWorkerError` is the no-healthy-workers terminal. Both
+  errors map to HTTP 503 (handlers that want 404 for missing-burrow add
+  an explicit pre-check; same error class covers both cases).
+
+A single run never crosses workers: `spawnRun` resolves placement
+**before** `runs.create` (so `runs.worker_id` lands at row creation),
+then services provision + dispatch + rollback against the resolved
+`placement.client`. Mid-run failover is V2.
+
+**Probe.** `src/server/probe.ts` runs a single-flight periodic loop —
+same shape as the scheduler tick (§11.I) — reconciling per-worker
+state (`WARREN_WORKER_PROBE_INTERVAL_MS`, default 30s; disable with
+`WARREN_WORKER_PROBE_DISABLED=1`). Probe ok flips
+`unreachable → healthy`; probe fail flips `healthy → unreachable`.
+`draining` is sticky — operator-set state, never overwritten by the
+probe, exited only via the admin endpoint.
+
+**Admin surface.**
+
+- `POST /workers/:name/drain { drain: boolean }` — issues
+  `POST /admin/drain` against the burrow worker **first**, then flips
+  warren's state. Burrow-then-warren ordering means a failed burrow call
+  never leaves warren claiming a state burrow does not honor. Reverse
+  with `{ drain: false }`.
+- `GET /workers` — returns the workers table joined with `pool.names()`
+  so each row carries pool-membership status; per-worker errors are
+  surfaced for operator visibility.
+
+**Fan-out reads.** `src/burrow-client/fanout.ts`
+(`fanOutAcrossWorkers`) drives `Promise.allSettled` across
+`pool.names()` (alphabetical for determinism) for list-shaped routes
+(`GET /burrows`, etc.). Responses are unioned and sorted by domain
+field (`createdAt`); per-worker rejections are normalized and surfaced
+as `workerErrors: { worker, message }[]` on the wire envelope alongside
+the unioned rows. The helper never throws. Per-resource reads
+(`GET /burrows/:id`, streaming) deliberately do not fan out — they use
+`pool.clientFor` because exactly one worker holds that burrow's
+sandbox + SQLite row.
+
+**Server-level config.** The `[[workers]]` block lives in warren's
+server-level TOML config (`src/server-config/`) — distinct from the
+per-project `.warren/` loader in §11.H. Unlike the per-project loader's
+missing-vs-malformed envelope, the server-level loader fails loudly on
+malformed, missing-when-required, or schema-reject inputs: a bad
+server-level config is a deployment failure, not a per-project
+recoverable. The supervisor refuses to start when `[[workers]]` is
+non-empty and `BURROW_API_TOKEN` is unset.
+
+**Failure semantics.**
+
+- *Decommissioning a worker with live burrows.* Operator action: drain
+  via `POST /workers/:name/drain`, wait for in-flight runs to finish,
+  remove the entry from `[[workers]]`, restart. Orphaned
+  `burrows.worker_id` rows surface in `warren doctor` as
+  `worker_missing`. Auto-migration is V2.
+- *Network partition mid-dispatch.* `spawnRun`'s existing
+  `BurrowUnreachableError` rollback (§4.3 step 2) handles transient
+  blips; the pool's `clientFor` retries through the transport-mapping
+  wrapper, so structured errors bubble up unchanged.
+- *Sticky-by-burrow with an unreachable worker* fails loudly rather
+  than migrating — a feature, not a bug.
+- *Process model.* The supervisor (§5.1, §10.3) still spawns one local
+  `burrow serve` per warren container; remote workers are
+  operator-managed (their own supervisors, on their own hosts). The
+  supervisor's life-cycle scope is the single co-tenanted burrow, not
+  the pool.
+
+**Zero-config back-compat.** A deploy with no `[[workers]]` block and
+the existing `WARREN_BURROW_*` env vars behaves identically to the
+single-worker container: same socket, same dispatch flow, one synthetic
+`'local'` worker, fan-out unions of one. Existing handlers / scheduler
+/ bridges tests pass unmodified.
+
+Future work tracked under `ROADMAP.md` R-12 and §11.J item #1: dynamic
+worker registration, capacity-aware / label-based placement, per-worker
+tokens, and auto-migration on decommission.
 
 ---
 
