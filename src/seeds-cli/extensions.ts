@@ -1,11 +1,11 @@
 /**
- * Shell-out facade to the seeds CLI (`sd`).
+ * Shell-out facade to the seeds CLI (`sd`) for extension reads/writes.
  *
- * Two operations matter for R-06:
+ * Two operations live here today:
  *
  *   `listScheduledSeeds` — `sd list --format json` against a project's
  *      .seeds/ directory, then filter to open issues with a parseable
- *      `extensions.scheduledFor`. The dispatcher decides past-vs-future.
+ *      `extensions.scheduledFor`. The scheduler decides past-vs-future.
  *
  *   `clearScheduledFor`  — `sd update <id> --extensions <json>` to move
  *      `scheduledFor → lastScheduledRun` after a successful dispatch.

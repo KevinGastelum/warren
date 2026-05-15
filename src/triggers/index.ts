@@ -2,6 +2,10 @@
  * Public re-exports for the R-06 scheduler module. Internal modules
  * import from here so file layout under `triggers/` can shift without
  * rippling out to call sites (mirrors src/warren-config/ + src/runs/).
+ *
+ * Seeds CLI shell-out (listScheduledSeeds, clearScheduledFor, envelope
+ * schema, SeedsCliError) lives in `src/seeds-cli/` — consumers import
+ * from there directly.
  */
 
 export {
@@ -30,26 +34,13 @@ export {
 	dispatchScheduledSeed,
 	resolveCronPrompt,
 } from "./dispatch.ts";
-export { SeedsCliError, TriggerDispatchError } from "./errors.ts";
+export { TriggerDispatchError } from "./errors.ts";
 export {
 	type RecordFireInput,
 	type TriggerKey,
 	TriggersRepo,
 	type UpsertTriggerInput,
 } from "./repo.ts";
-export {
-	type ParseScheduledSeedsResult,
-	parseScheduledSeeds,
-	type ScheduledSeed,
-	type SeedRow,
-	type SeedsListEnvelope,
-	SeedsListEnvelopeSchema,
-} from "./schema.ts";
-export {
-	clearScheduledFor,
-	listScheduledSeeds,
-	type SeedsCliDeps,
-} from "./seeds-extension.ts";
 export {
 	type BuildTriggerSummariesInput,
 	buildTriggerSummaries,

@@ -28,10 +28,10 @@
  */
 
 import type { Repos } from "../db/repos/index.ts";
+import type { ScheduledSeed } from "../seeds-cli/index.ts";
 import type { CronTrigger, DefaultsConfig } from "../warren-config/index.ts";
 import { parseCron } from "./cron.ts";
 import { TriggerDispatchError } from "./errors.ts";
-import type { ScheduledSeed } from "./schema.ts";
 
 export interface DispatchSpawnInput {
 	readonly agentName: string;

@@ -2,9 +2,9 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { openDatabase, type WarrenDb } from "../db/client.ts";
 import { createRepos, type Repos } from "../db/repos/index.ts";
 import { agents } from "../db/schema.ts";
+import type { ScheduledSeed } from "../seeds-cli/index.ts";
 import type { CronTrigger, DefaultsConfig } from "../warren-config/index.ts";
 import { type DispatchSpawnFn, dispatchCronTrigger, dispatchScheduledSeed } from "./dispatch.ts";
-import type { ScheduledSeed } from "./schema.ts";
 
 const TRIGGER_ID = "nightly";
 

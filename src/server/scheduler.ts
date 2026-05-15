@@ -26,12 +26,11 @@ import type { Repos } from "../db/repos/index.ts";
 import type { SpawnFn } from "../projects/clone.ts";
 import type { ProjectsConfig } from "../projects/config.ts";
 import { spawnRun } from "../runs/index.ts";
+import { clearScheduledFor, listScheduledSeeds } from "../seeds-cli/index.ts";
 import {
-	clearScheduledFor,
 	type DispatchSpawnFn,
 	type DispatchSpawnInput,
 	type DispatchSpawnResult,
-	listScheduledSeeds,
 	type SchedulerHandle,
 	type SchedulerTimerHandle,
 	startScheduler,

@@ -31,6 +31,7 @@
 
 import type { Repos } from "../db/repos/index.ts";
 import type { ProjectRow } from "../db/schema.ts";
+import type { ScheduledSeed } from "../seeds-cli/index.ts";
 import type { LoadedWarrenConfig } from "../warren-config/index.ts";
 import {
 	type DispatchCronResult,
@@ -39,7 +40,6 @@ import {
 	dispatchCronTrigger,
 	dispatchScheduledSeed,
 } from "./dispatch.ts";
-import type { ScheduledSeed } from "./schema.ts";
 
 export type LoadWarrenConfigFn = (
 	projectId: string,

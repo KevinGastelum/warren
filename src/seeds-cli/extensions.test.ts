@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { SpawnFn, SpawnResult } from "../projects/clone.ts";
 import { SeedsCliError } from "./errors.ts";
-import { clearScheduledFor, listScheduledSeeds } from "./seeds-extension.ts";
+import { clearScheduledFor, listScheduledSeeds } from "./extensions.ts";
 
 function ok(stdout: string): SpawnResult {
 	return { stdout, stderr: "", exitCode: 0 };

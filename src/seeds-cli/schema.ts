@@ -1,21 +1,22 @@
 /**
- * Zod schemas for the seeds CLI JSON envelopes the scheduler consumes.
+ * Zod schemas for the seeds CLI JSON envelopes warren consumes.
  *
- * Only two pieces matter for R-06:
- *   1. `sd list --format json` — pull every issue with extensions, filter
- *      down to those carrying a parseable `scheduledFor` in the past.
+ * Two pieces matter today:
+ *   1. `sd list --format json` — pull every issue with extensions, used
+ *      by the scheduler to filter down to seeds carrying a parseable
+ *      `scheduledFor` in the past.
  *   2. `sd update <id> --extensions <json>` returns a similar issue row;
  *      we don't read the response payload today, but the schema lives here
  *      so the same parser handles both shapes when we do.
  *
  * Schemas are intentionally permissive: seeds adds extensions fields
  * regularly (plan-backrefs, scheduledFor, lastScheduledRun, …) and the
- * scheduler should not break when seeds ships a new one. We parse only
- * the fields warren needs and pass `.passthrough()` everywhere else.
+ * facade should not break when seeds ships a new one. We parse only the
+ * fields warren needs and pass `.passthrough()` everywhere else.
  *
  * `scheduledFor` is canonical ISO 8601; we parse to a `Date` in
  * `parseScheduledSeeds` rather than carrying string-typed timestamps
- * through the dispatcher.
+ * through the scheduler.
  */
 
 import { z } from "zod";
