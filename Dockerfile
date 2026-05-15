@@ -42,6 +42,16 @@ FROM oven/bun:1.2
 # module coverage drift (e.g. missing `node:sqlite` on v1.2.23) crashed any
 # Next.js / Remix project on startup. NodeSource ships a recent LTS — bookworm's
 # stock `nodejs` package is too old (18.19) for current frontend stacks.
+#
+# netcat-openbsd is required by burrow's inbound port-forwarder (SPEC §8.7,
+# `../burrow/src/provider/local/inbound-forward.ts`): the forwarder accepts
+# host-loopback connections and `nsenter`s into the burrow netns to relay
+# via `nc 127.0.0.1 <sandboxPort>`. Without it, every accepted connection's
+# relay spawn fails, the host socket gets terminated, and any client (the
+# warren readiness probe in particular) just sees connection drops until
+# the deadline. Diagnosed against run_t688fe74n1ts (jayminwest.com) where
+# `next dev -H 0.0.0.0` was finally binding on `0.0.0.0:3000` inside the
+# netns but the 5m probe still failed because the relay never spawned.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         bubblewrap \
@@ -50,6 +60,7 @@ RUN apt-get update \
         ca-certificates \
         curl \
         gnupg \
+        netcat-openbsd \
     && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*

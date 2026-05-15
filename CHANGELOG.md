@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.13] — 2026-05-15
+
+Bake `netcat-openbsd` into the runtime image. Burrow's inbound
+port-forwarder (SPEC §8.7, `../burrow/src/provider/local/inbound-forward.ts`)
+relays each accepted host-loopback connection into the burrow netns via
+`nsenter --net=/proc/<pid>/ns/net -- nc 127.0.0.1 <sandboxPort>`. Without
+`nc` on `PATH` inside the warren container, the relay never spawns, the
+host socket is terminated, and any client (notably the reap-time preview
+readiness probe) just sees connection drops until the deadline.
+
+Diagnosed against `run_t688fe74n1ts` (jayminwest.com) where
+`next dev -H 0.0.0.0` was finally binding on `0.0.0.0:3000` inside the
+netns — confirmed by Next.js logging both `Local:` AND `Network:` URLs —
+but the 5m probe still failed because no relay process was ever started.
+`flyctl ssh console` confirmed `/usr/bin/nsenter` present, `nc` not
+found. With this layer, fresh image builds carry both binaries that
+burrow's forwarder expects.
+
+### Changed
+
+- **`build(Dockerfile)`** — add `netcat-openbsd` to the apt-get layer
+  that already installs `bubblewrap` + `uidmap` + util-linux. Image
+  growth is sub-megabyte; the package is the standard `nc` provider on
+  bookworm.
+
 ## [0.3.12] — 2026-05-15
 
 R-03: per-project `.canopy/` role tier. Warren's agent registry now has
