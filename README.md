@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="branding/logo.png" alt="warren — self-hostable cloud control plane" width="640">
+</p>
+
 # Warren
 
 Spawn cloud agents at your GitHub repos. Watch them work live, steer them mid-run, get a branch back.
