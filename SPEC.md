@@ -44,7 +44,7 @@ In the UI:
 ### 2.2 What Warren is
 
 - The **control plane**: one process, one HTTP API, one volume.
-- The **agent registry**: built-in agents inline, plus optional canopy library on top.
+- The **agent registry**: built-in agents inline, plus optional canopy library on top, plus per-project `.canopy/` tier (R-03; precedence project > library > built-in).
 - The **dispatcher**: provisions sandboxes via the runtime, streams events back, reaps results.
 - The **UI**: web frontend served from the same process.
 - The **scheduler**: in-process cron tick + scheduled-seed dispatch (V1, §11.I). Webhook/event-triggered runs deferred to V2.
@@ -474,9 +474,9 @@ warren/
 
 ```
 # V1 — manual run path
-GET    /agents                  — list registered agent defs from canopy
-POST   /agents/refresh          — re-clone canopy repo, re-discover agents
-GET    /agents/:name            — full rendered agent (cn render output)
+GET    /agents                  — list registered agent defs (built-ins + library); `?projectId=<id>` adds that project's `.canopy/` tier (R-03)
+POST   /agents/refresh          — re-clone canopy library AND scan every project's `.canopy/` (per-project errors collected, never fatal — R-03)
+GET    /agents/:name            — full rendered agent (cn render output); `?projectId=<id>` resolves project-first with global fallback (R-03)
 
 GET    /projects                — list cloned project repos
 POST   /projects                — { gitUrl, defaultBranch? } → clone
@@ -484,6 +484,7 @@ DELETE /projects/:id            — remove project
 GET    /projects/:id/warren-config — parsed .warren/ envelope (§11.H, R-02)
 GET    /projects/:id/triggers   — parsed triggers.yaml joined with last/next-fire state (§11.I, R-06)
 POST   /projects/:id/triggers/:triggerId/run — Run Now: dispatch trigger inline with trigger='manual'
+POST   /projects/:id/agents/refresh — refresh one project's `.canopy/` tier (R-03)
 
 POST   /runs                    — { agent, project, prompt } → spawn
 GET    /runs                    — list with filters (status, agent, project)
@@ -527,11 +528,19 @@ Deferred. V1's `Client` class is internal; warren's only public surface is the H
 
 ```sql
 agents (
-  name TEXT PRIMARY KEY,        -- canopy prompt name
+  id INTEGER PRIMARY KEY AUTOINCREMENT,   -- synthetic rowid PK (R-03; migration 0011)
+  project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,  -- NULL = global tier (built-in or library); non-null = project-scoped (R-03)
+  name TEXT NOT NULL,           -- canopy prompt name
   rendered_json TEXT,           -- last cn render output, cached
   registered_at TEXT,
   last_refreshed TEXT
 );
+-- Composite unique on (project_id, name) plus partial unique on (name) WHERE
+-- project_id IS NULL guarantees one global row per name (sqlite treats NULL
+-- as distinct in plain unique indexes, so the partial index is load-bearing).
+-- The agents table is a soft cache: `POST /agents/refresh` re-discovers from
+-- canopy, so the old `runs.agent_name → agents.name` FK was dropped in 0011
+-- rather than rippled into a composite FK.
 
 projects (
   id TEXT PRIMARY KEY,          -- prj_xxx

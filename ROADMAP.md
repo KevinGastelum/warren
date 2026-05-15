@@ -217,7 +217,21 @@ control plane.
 ---
 
 ## R-03 — Per-project `.canopy/` role tier
-Status: [proposed]
+Status: [shipped] — landed via plan `pl-fef5` (parent seed `warren-2842`),
+2026-05-15. Schema migration (`0011_colorful_mole_man.sql`) drops the
+single-column `name` PK on `agents` and replaces it with a synthetic rowid
+PK + composite unique on `(project_id, name)` + partial unique on `(name)
+WHERE project_id IS NULL`. `POST /agents/refresh` now refreshes the library
+AND every project's `.canopy/` in one call (per-project errors collected,
+never fatal); `POST /projects/:id/agents/refresh` is the targeted path.
+`GET /agents?projectId=<id>` returns global ∪ that project's tier;
+`GET /agents/:name?projectId=<id>` resolves project-first with global
+fallback. Spawn prefers the project tier with a fallback to global.
+`runs.rendered_agent_json.frontmatter.source` carries `'project:<projectId>'`
+for project-tier rows alongside the existing `'builtin'` / `'library'`
+labels. UI surfaces a project-tier badge on the Agents page and filters
+NewRun's role picker by selected project. Acceptance scenario 23
+(`23-canopy-project-tier.ts`) covers the project-tier roundtrip.
 Depends on: —
 Unlocks: R-05 (roles tab can read/write project-local roles); user-creatable
 roles without forking a shared canopy repo
@@ -229,9 +243,11 @@ roles that should travel with one specific project — e.g., a refactor-bot
 tuned for this codebase's conventions. Forcing project-specific roles into a
 shared canopy repo couples unrelated projects' role definitions.
 
-**Sketch.** Extend `src/registry/canopy.ts` to scan `<projectPath>/.canopy/`
-for agent prompts in addition to the shared repo. Resolution order when a name
-collides:
+**Shipped shape.** `src/registry/canopy.ts` now parameterizes
+`CanopyClient`'s cwd via `CanopyClient.forProjectPath()` so the same facade
+drives both the library clone and per-project `.canopy/` directories.
+`src/registry/refresh.ts` adds `refreshProjectAgents(projectId)` next to
+`refreshAgentRegistry`. Resolution order when a name collides:
 
     per-project (.canopy/ in the cloned repo)
       > library (CANOPY_REPO_URL)
@@ -245,16 +261,14 @@ library | project:<projectId>`).
 Spawn-time freezing (today's behavior) is unchanged: the rendered JSON is
 copied into `runs.renderedAgentJson` and never re-rendered mid-run.
 
-**Open questions.**
-- Whether per-project roles can `extend:` library/built-in roles. Yes — that's
-  the whole point. Canopy already supports inheritance; the resolver just
-  needs to look up the parent across tiers.
-- Whether a per-project role's render result should be cached on disk inside
-  the project (`<projectPath>/.canopy/.rendered/`) so consumers without
-  warren can still see it. Probably yes; matches `cn emit`'s contract.
-- What happens when a per-project role and a library role share a name and
-  the library role's parent changes. Per-project wins; resolver must not
-  silently re-render across tier boundaries.
+**Follow-ups (filed as seeds; not in V1).**
+- Cross-tier inheritance: whether a per-project role can `extend:` a
+  library or built-in role. Canopy supports inheritance within a single
+  tier; the resolver needs to look up the parent across tiers. V1 ships
+  single-tier inheritance only.
+- On-disk rendered cache under `<projectPath>/.canopy/.rendered/` so
+  consumers without warren can read project-tier roles directly. Matches
+  `cn emit`'s contract.
 
 ---
 

@@ -7,6 +7,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+R-03: per-project `.canopy/` role tier. Warren's agent registry now has
+three tiers — built-in, library, and per-project — with precedence
+project > library > built-in. Per-project roles travel with the project
+they belong to, no more forking a shared canopy repo to add a
+project-specific refactor-bot. Plan: `pl-fef5` (parent seed
+`warren-2842`).
+
+### Added
+
+- **`feat(db)`** — migration `0011_colorful_mole_man.sql` (sqlite) +
+  `0004_magical_valeria_richards.sql` (postgres) drop the single-column
+  `name` primary key on `agents` in favor of a synthetic rowid PK,
+  add a nullable `project_id` column (`ON DELETE CASCADE`), and enforce
+  identity with a composite unique on `(project_id, name)` plus a
+  partial unique on `(name) WHERE project_id IS NULL`. The
+  `runs.agent_name → agents.name` FK is dropped — the agents table is
+  a soft cache and `POST /agents/refresh` re-discovers from canopy, so
+  rippling the FK into a composite was rejected as more invasive than
+  the cache it would guard. (`warren-094a`)
+- **`feat(registry)`** — `CanopyClient.forProjectPath()` factory
+  parameterizes the client's cwd so the same `cn list` / `cn render`
+  facade drives both the library clone and a project's `<projectPath>/.canopy/`.
+  `refreshProjectAgents(projectId)` lives alongside the existing
+  `refreshAgentRegistry` and scans one project's `.canopy/` per call.
+  `AgentSource` widens to `'project:<projectId>'` alongside `'builtin'`
+  and `'library'`; readers that pattern-match on prefix keep working,
+  readers that did `source === 'library'` were widened to
+  `startsWith('project:')` where needed. (`warren-7a3b`, `warren-2f14`,
+  `warren-a8b0`, `warren-91bd`)
+- **`feat(server)`** — `POST /agents/refresh` now refreshes the library
+  AND every project's `.canopy/` in one call; per-project errors are
+  collected on the response envelope under `projectErrors` and never
+  fatal. `POST /projects/:id/agents/refresh` is the targeted path for
+  refreshing one project. `GET /agents` accepts `?projectId=<id>` to
+  return global ∪ that project's tier; `GET /agents/:name?projectId=<id>`
+  resolves project-first with global fallback. Empty `?projectId=` is
+  rejected so a typo'd query surfaces instead of silently collapsing to
+  global-only. (`warren-7777`)
+- **`feat(runs)`** — `spawnRun` prefers the project-tier row when the
+  run's project matches an agent name in both tiers, falls back to
+  global otherwise. `runs.rendered_agent_json.frontmatter.source`
+  reflects the chosen tier. (`warren-0a7e`)
+- **`feat(ui)`** — Agents page filters by `?projectId=<id>` (URL
+  param-driven, persisted on reload), surfaces a project-tier badge
+  alongside the existing built-in / library labels, and renders the
+  project name next to the badge. NewRun's role picker filters to the
+  selected project's tier ∪ globals, with the project-tier badge
+  inline. New `src/ui/src/lib/agent-source.ts` centralizes the
+  source-string parsing the UI surfaces. (`warren-f36c`)
+- **`test(acceptance)`** — scenario 23 (`23-canopy-project-tier`)
+  covers the project-tier roundtrip end-to-end against a live
+  warren+burrow stack: per-project `.canopy/` is rendered, surfaces in
+  the agents list with the right provenance, spawns prefer the
+  project-tier row, and `POST /agents/refresh` doesn't tank on a
+  malformed per-project prompt. (`warren-b2f9`)
+
+### Changed
+
+- **`refactor(server)`** — `withAgentSource` decorates AgentRow with the
+  full provenance label (`'builtin' | 'library' | 'project:<projectId>'`)
+  on every read path. Listed + per-project refresh outcomes share the
+  same `decorateRefreshResult` helper so the wire shape is identical
+  across `POST /agents/refresh` and `POST /projects/:id/agents/refresh`.
+
 ## [0.3.11] — 2026-05-15
 
 R-01 producer side: warren now writes warren-namespaced runtime metadata
