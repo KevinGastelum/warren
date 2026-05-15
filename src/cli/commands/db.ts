@@ -40,9 +40,9 @@
  *
  * So a row selected from sqlite plugs straight into a pg insert with no
  * field-level conversion. The PK is preserved verbatim — including the
- * SERIAL `events.id` — and the tool advances the events sequence to
- * `MAX(id)` after the copy so future appends from warren-on-pg don't
- * collide with seeded rows.
+ * SERIAL `events.id` and `agents.id` (R-03 step 1, pl-fef5, warren-094a) —
+ * and the tool advances both sequences to `MAX(id)` after the copy so
+ * future appends from warren-on-pg don't collide with seeded rows.
  *
  * ## CLI shape
  *
@@ -111,15 +111,17 @@ export async function runMigrateToPostgres(
 	// FK-free roots first. Each block follows the same shape: select all
 	// rows from sqlite, chunk-insert into pg with `ON CONFLICT DO NOTHING`,
 	// count the returned PKs to derive inserted-vs-skipped.
+	let agentsRowCount = 0;
 	{
 		const rows = source.drizzle.select().from(sqliteSchema.agents).all();
+		agentsRowCount = rows.length;
 		let inserted = 0;
 		for (let i = 0; i < rows.length; i += chunkSize) {
 			const ret = await target.drizzle
 				.insert(pgSchema.agents)
 				.values(rows.slice(i, i + chunkSize))
 				.onConflictDoNothing()
-				.returning({ pk: pgSchema.agents.name });
+				.returning({ pk: pgSchema.agents.id });
 			inserted += ret.length;
 		}
 		tables.push({
@@ -253,6 +255,14 @@ export async function runMigrateToPostgres(
 	if (eventsRowCount > 0) {
 		await target.raw.query(
 			"SELECT setval(pg_get_serial_sequence('events', 'id'), (SELECT MAX(id) FROM events))",
+		);
+	}
+	// agents.id is now serial too (R-03 step 1, pl-fef5, warren-094a); same
+	// post-copy sequence-advance is required so warren-on-pg appends don't
+	// collide with copied rows.
+	if (agentsRowCount > 0) {
+		await target.raw.query(
+			"SELECT setval(pg_get_serial_sequence('agents', 'id'), (SELECT MAX(id) FROM agents))",
 		);
 	}
 

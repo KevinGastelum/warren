@@ -22,7 +22,16 @@
  */
 
 import { sql } from "drizzle-orm";
-import { doublePrecision, index, integer, jsonb, pgTable, serial, text } from "drizzle-orm/pg-core";
+import {
+	doublePrecision,
+	index,
+	integer,
+	jsonb,
+	pgTable,
+	serial,
+	text,
+	uniqueIndex,
+} from "drizzle-orm/pg-core";
 import {
 	EVENT_STREAMS,
 	INDEX_NAMES,
@@ -33,12 +42,21 @@ import {
 	WORKER_STATES,
 } from "./columns.ts";
 
-export const agents = pgTable(TABLE_NAMES.agents, {
-	name: text("name").primaryKey(),
-	renderedJson: jsonb("rendered_json").notNull(),
-	registeredAt: text("registered_at").notNull(),
-	lastRefreshed: text("last_refreshed").notNull(),
-});
+export const agents = pgTable(
+	TABLE_NAMES.agents,
+	{
+		id: serial("id").primaryKey(),
+		projectId: text("project_id").references(() => projects.id, { onDelete: "cascade" }),
+		name: text("name").notNull(),
+		renderedJson: jsonb("rendered_json").notNull(),
+		registeredAt: text("registered_at").notNull(),
+		lastRefreshed: text("last_refreshed").notNull(),
+	},
+	(t) => [
+		uniqueIndex(INDEX_NAMES.agentsProjectName).on(t.projectId, t.name),
+		uniqueIndex(INDEX_NAMES.agentsGlobalName).on(t.name).where(sql`${t.projectId} IS NULL`),
+	],
+);
 
 export const projects = pgTable(
 	TABLE_NAMES.projects,
@@ -58,9 +76,10 @@ export const runs = pgTable(
 	TABLE_NAMES.runs,
 	{
 		id: text("id").primaryKey(),
-		agentName: text("agent_name")
-			.notNull()
-			.references(() => agents.name),
+		// Plain text, no FK to agents.name — mirror of sqlite (R-03 step 1,
+		// pl-fef5, warren-094a). With agents identified by (name, project_id)
+		// rather than a single-column PK, this FK is no longer representable.
+		agentName: text("agent_name").notNull(),
 		projectId: text("project_id").references(() => projects.id, { onDelete: "set null" }),
 		burrowId: text("burrow_id"),
 		burrowRunId: text("burrow_run_id"),

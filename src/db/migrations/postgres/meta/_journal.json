@@ -29,6 +29,13 @@
 			"when": 1778858238361,
 			"tag": "0003_add_run_seed_id",
 			"breakpoints": true
+		},
+		{
+			"idx": 4,
+			"version": "7",
+			"when": 1778861833145,
+			"tag": "0004_magical_valeria_richards",
+			"breakpoints": true
 		}
 	]
 }

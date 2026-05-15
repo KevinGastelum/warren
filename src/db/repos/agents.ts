@@ -7,7 +7,7 @@
  * registered_at timestamp.
  */
 
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq, isNull } from "drizzle-orm";
 import { NotFoundError } from "../../core/errors.ts";
 import type { SqliteDrizzleDb } from "../client.ts";
 import type { AgentRow } from "../schema.ts";
@@ -45,30 +45,52 @@ export class AgentsRepo {
 			const txDb = tx.drizzle as SqliteDrizzleDb;
 			const agents = tx.schema.agents;
 			const existing = await tx.pickOne(
-				txDb.select().from(agents).where(eq(agents.name, input.name)),
+				txDb
+					.select()
+					.from(agents)
+					.where(and(eq(agents.name, input.name), isNull(agents.projectId))),
 			);
 			if (existing) {
 				const patch = {
 					renderedJson: input.renderedJson,
 					lastRefreshed: ts,
 				};
-				await tx.runWrite(txDb.update(agents).set(patch).where(eq(agents.name, input.name)));
+				await tx.runWrite(
+					txDb
+						.update(agents)
+						.set(patch)
+						.where(and(eq(agents.name, input.name), isNull(agents.projectId))),
+				);
 				return { ...existing, ...patch };
 			}
-			const row: AgentRow = {
-				name: input.name,
-				renderedJson: input.renderedJson,
-				registeredAt: ts,
-				lastRefreshed: ts,
-			};
-			await tx.runWrite(txDb.insert(agents).values(row));
-			return row;
+			await tx.runWrite(
+				txDb.insert(agents).values({
+					name: input.name,
+					projectId: null,
+					renderedJson: input.renderedJson,
+					registeredAt: ts,
+					lastRefreshed: ts,
+				}),
+			);
+			const inserted = await tx.pickOne(
+				txDb
+					.select()
+					.from(agents)
+					.where(and(eq(agents.name, input.name), isNull(agents.projectId))),
+			);
+			if (!inserted) {
+				throw new Error("agents.upsert: insert returned no row");
+			}
+			return inserted;
 		});
 	}
 
 	async get(name: string): Promise<AgentRow | null> {
 		const row = await this.adapter.pickOne(
-			this.db.select().from(this.agents).where(eq(this.agents.name, name)),
+			this.db
+				.select()
+				.from(this.agents)
+				.where(and(eq(this.agents.name, name), isNull(this.agents.projectId))),
 		);
 		return row ?? null;
 	}
@@ -88,6 +110,10 @@ export class AgentsRepo {
 	}
 
 	async delete(name: string): Promise<void> {
-		await this.adapter.runWrite(this.db.delete(this.agents).where(eq(this.agents.name, name)));
+		await this.adapter.runWrite(
+			this.db
+				.delete(this.agents)
+				.where(and(eq(this.agents.name, name), isNull(this.agents.projectId))),
+		);
 	}
 }

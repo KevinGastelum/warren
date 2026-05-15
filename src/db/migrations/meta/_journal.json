@@ -78,6 +78,13 @@
 			"when": 1778858238069,
 			"tag": "0010_add_run_seed_id",
 			"breakpoints": true
+		},
+		{
+			"idx": 11,
+			"version": "6",
+			"when": 1778861762957,
+			"tag": "0011_colorful_mole_man",
+			"breakpoints": true
 		}
 	]
 }

@@ -18,7 +18,7 @@
  */
 
 import { sql } from "drizzle-orm";
-import { index, integer, real, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { index, integer, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 import {
 	EVENT_STREAMS,
 	INDEX_NAMES,
@@ -29,12 +29,44 @@ import {
 	WORKER_STATES,
 } from "./columns.ts";
 
-export const agents = sqliteTable(TABLE_NAMES.agents, {
-	name: text("name").primaryKey(),
-	renderedJson: text("rendered_json", { mode: "json" }).notNull(),
-	registeredAt: text("registered_at").notNull(),
-	lastRefreshed: text("last_refreshed").notNull(),
-});
+/**
+ * Canopy registry cache. Three tiers of rows live here, addressed by
+ * (name, project_id):
+ *
+ *   - built-in   (`source = 'builtin'`)        — `project_id IS NULL`
+ *   - library    (`source = 'library'`)        — `project_id IS NULL`
+ *   - project    (`source = 'project:<id>'`)   — `project_id = <id>`
+ *
+ * R-03 (pl-fef5, warren-094a) replaced the single-column `name` primary
+ * key with a synthetic rowid PK so the project tier can carry duplicate
+ * names across projects. Identity is enforced at the index layer:
+ *
+ *   - composite unique on (project_id, name) for project-tier rows.
+ *   - partial unique on (name) WHERE project_id IS NULL for the global
+ *     tier — SQLite treats NULL as distinct in plain unique indexes, so
+ *     the composite alone would allow two `(NULL, "claude-code")` rows.
+ *
+ * `runs.agent_name` used to FK to `agents.name`; with composite identity
+ * the FK is unrepresentable in SQLite (no composite FK from a single
+ * column), so it was dropped. The agents table is a soft cache —
+ * spawn-time lookups fall back to "global" if a project-tier row is
+ * missing and `POST /agents/refresh` re-discovers from canopy.
+ */
+export const agents = sqliteTable(
+	TABLE_NAMES.agents,
+	{
+		id: integer("id").primaryKey({ autoIncrement: true }),
+		projectId: text("project_id").references(() => projects.id, { onDelete: "cascade" }),
+		name: text("name").notNull(),
+		renderedJson: text("rendered_json", { mode: "json" }).notNull(),
+		registeredAt: text("registered_at").notNull(),
+		lastRefreshed: text("last_refreshed").notNull(),
+	},
+	(t) => [
+		uniqueIndex(INDEX_NAMES.agentsProjectName).on(t.projectId, t.name),
+		uniqueIndex(INDEX_NAMES.agentsGlobalName).on(t.name).where(sql`${t.projectId} IS NULL`),
+	],
+);
 
 export const projects = sqliteTable(
 	TABLE_NAMES.projects,
@@ -54,9 +86,12 @@ export const runs = sqliteTable(
 	TABLE_NAMES.runs,
 	{
 		id: text("id").primaryKey(),
-		agentName: text("agent_name")
-			.notNull()
-			.references(() => agents.name),
+		// Plain text, no FK to agents.name. With R-03 (pl-fef5, warren-094a)
+		// agents are identified by (name, project_id) rather than a single-
+		// column PK, so this FK is no longer representable. The agents table
+		// is a soft cache anyway — spawn resolves `(agentName, projectId)`
+		// with global fallback at the application layer.
+		agentName: text("agent_name").notNull(),
 		// Nullable + ON DELETE SET NULL so deleting a project orphans its
 		// runs instead of being blocked by the FK. The UI's delete-project
 		// dialog promises 'Run history for this project is kept' (warren-5f19);
