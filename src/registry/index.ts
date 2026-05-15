@@ -29,7 +29,9 @@ export {
 export {
 	type AgentSummary,
 	CanopyClient,
+	type CanopyClientLibraryOptions,
 	type CanopyClientOptions,
+	type CanopyClientProjectOptions,
 	DEFAULT_CANOPY_TIMEOUT_MS,
 	type SpawnFn,
 	type SpawnOptions,

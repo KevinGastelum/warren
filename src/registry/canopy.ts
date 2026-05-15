@@ -14,8 +14,10 @@
  *     the raw JSON envelope which `parseRenderedAgent` then validates.
  *
  * What the facade adds beyond a raw `Bun.spawn`:
- *   - Cwd is fixed to the cloned canopy library, so callers can't accidentally
- *     resolve `.canopy/` in the wrong place.
+ *   - Cwd is parameterized so the same facade drives both the library
+ *     clone (`forLibrary`) and per-project `.canopy/` directories
+ *     (`forProjectPath`, R-03 / pl-fef5). Callers should reach for a
+ *     factory rather than picking a cwd by hand.
  *   - Transport-layer failures (binary missing, non-zero exit, malformed
  *     JSON, empty stdout) become `CanopyUnavailableError`, mirroring the
  *     burrow-client transport-error mapping pattern.
@@ -71,20 +73,71 @@ const ErrorResponseSchema = z.object({
 });
 
 export interface CanopyClientOptions {
+	readonly cnBinary: string;
+	readonly cwd: string;
+	readonly spawn?: SpawnFn;
+	readonly timeoutMs?: number;
+}
+
+export interface CanopyClientLibraryOptions {
 	readonly config: CanopyRegistryConfig;
 	readonly spawn?: SpawnFn;
 	readonly timeoutMs?: number;
 }
 
+export interface CanopyClientProjectOptions {
+	/**
+	 * Project root directory. `cn` resolves `.canopy/` relative to its
+	 * cwd, so passing the project root (not `<projectPath>/.canopy`)
+	 * mirrors how the library clone is wired in `forLibrary`.
+	 */
+	readonly projectPath: string;
+	readonly cnBinary?: string;
+	readonly spawn?: SpawnFn;
+	readonly timeoutMs?: number;
+}
+
 export class CanopyClient {
-	private readonly config: CanopyRegistryConfig;
+	private readonly cnBinary: string;
+	private readonly cwd: string;
 	private readonly spawn: SpawnFn;
 	private readonly timeoutMs: number;
 
 	constructor(opts: CanopyClientOptions) {
-		this.config = opts.config;
+		this.cnBinary = opts.cnBinary;
+		this.cwd = opts.cwd;
 		this.spawn = opts.spawn ?? defaultSpawn;
 		this.timeoutMs = opts.timeoutMs ?? DEFAULT_CANOPY_TIMEOUT_MS;
+	}
+
+	/**
+	 * Library tier: scan the cloned canopy repo at `config.localDir`.
+	 * Existing `POST /agents/refresh` and `warren register-agent` paths
+	 * use this factory.
+	 */
+	static forLibrary(opts: CanopyClientLibraryOptions): CanopyClient {
+		return new CanopyClient({
+			cnBinary: opts.config.cnBinary,
+			cwd: opts.config.localDir,
+			...(opts.spawn !== undefined ? { spawn: opts.spawn } : {}),
+			...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
+		});
+	}
+
+	/**
+	 * Project tier (R-03 / pl-fef5): scan `<projectPath>/.canopy/` for
+	 * project-scoped agents. The `cn` binary name defaults to "cn"
+	 * because project-tier refresh is independent of the library env
+	 * (`WARREN_CN_BINARY` still applies if the operator overrode it,
+	 * but the caller wires that through explicitly).
+	 */
+	static forProjectPath(opts: CanopyClientProjectOptions): CanopyClient {
+		return new CanopyClient({
+			cnBinary: opts.cnBinary ?? "cn",
+			cwd: opts.projectPath,
+			...(opts.spawn !== undefined ? { spawn: opts.spawn } : {}),
+			...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
+		});
 	}
 
 	/** List prompts tagged `agent`, filtered to active status. */
@@ -127,16 +180,16 @@ export class CanopyClient {
 	}
 
 	private async invoke(args: readonly string[]): Promise<SpawnResult> {
-		const cmd = [this.config.cnBinary, ...args];
+		const cmd = [this.cnBinary, ...args];
 		try {
-			return await this.spawn(cmd, { cwd: this.config.localDir, timeoutMs: this.timeoutMs });
+			return await this.spawn(cmd, { cwd: this.cwd, timeoutMs: this.timeoutMs });
 		} catch (err) {
 			if (err instanceof CanopyUnavailableError) throw err;
 			throw new CanopyUnavailableError(
-				`failed to spawn ${this.config.cnBinary} ${args.join(" ")}: ${formatError(err)}`,
+				`failed to spawn ${this.cnBinary} ${args.join(" ")}: ${formatError(err)}`,
 				{
 					cause: err,
-					recoveryHint: `ensure the ${this.config.cnBinary} binary is on PATH and the canopy clone exists at ${this.config.localDir}`,
+					recoveryHint: `ensure the ${this.cnBinary} binary is on PATH and the .canopy/ store exists at ${this.cwd}`,
 				},
 			);
 		}

@@ -81,7 +81,7 @@ describe("refreshAgentRegistry", () => {
 				"docs-bot": { ok: rendered("docs-bot", { system: "docs", skills: "..." }) },
 			},
 		);
-		const client = new CanopyClient({ config: CFG, spawn });
+		const client = CanopyClient.forLibrary({ config: CFG, spawn });
 
 		const result = await refreshAgentRegistry({
 			client,
@@ -117,7 +117,7 @@ describe("refreshAgentRegistry", () => {
 				},
 			},
 		);
-		const client = new CanopyClient({ config: CFG, spawn });
+		const client = CanopyClient.forLibrary({ config: CFG, spawn });
 
 		const result = await refreshAgentRegistry({
 			client,
@@ -150,7 +150,7 @@ describe("refreshAgentRegistry", () => {
 				"ok-bot": { ok: rendered("ok-bot", { system: "ok" }) },
 			},
 		);
-		const client = new CanopyClient({ config: CFG, spawn });
+		const client = CanopyClient.forLibrary({ config: CFG, spawn });
 
 		const result = await refreshAgentRegistry({
 			client,
@@ -176,7 +176,7 @@ describe("refreshAgentRegistry", () => {
 			},
 			{ "refactor-bot": { ok: rendered("refactor-bot", { system: "v1" }) } },
 		);
-		const client = new CanopyClient({ config: CFG, spawn });
+		const client = CanopyClient.forLibrary({ config: CFG, spawn });
 		await refreshAgentRegistry({
 			client,
 			agents,
@@ -194,7 +194,7 @@ describe("refreshAgentRegistry", () => {
 			},
 			{ "refactor-bot": { ok: rendered("refactor-bot", { system: "v2" }, 2) } },
 		);
-		const client2 = new CanopyClient({ config: CFG, spawn: spawn2 });
+		const client2 = CanopyClient.forLibrary({ config: CFG, spawn: spawn2 });
 		await refreshAgentRegistry({
 			client: client2,
 			agents,
@@ -222,7 +222,7 @@ describe("refreshAgentRegistry", () => {
 			},
 			{ "live-bot": { ok: rendered("live-bot", { system: "x" }) } },
 		);
-		const client = new CanopyClient({ config: CFG, spawn });
+		const client = CanopyClient.forLibrary({ config: CFG, spawn });
 
 		const result = await refreshAgentRegistry({
 			client,
@@ -241,7 +241,7 @@ describe("refreshAgentRegistry", () => {
 		await agents.upsert({ name: "stale-bot", renderedJson: { sections: {} } });
 
 		const spawn = buildSpawn({ success: true, command: "list", prompts: [] }, {});
-		const client = new CanopyClient({ config: CFG, spawn });
+		const client = CanopyClient.forLibrary({ config: CFG, spawn });
 
 		const result = await refreshAgentRegistry({
 			client,

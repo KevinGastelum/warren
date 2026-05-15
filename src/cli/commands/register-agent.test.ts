@@ -89,7 +89,7 @@ describe("runRegisterAgent", () => {
 				"refactor-bot": rendered("refactor-bot", { system: "refactor" }, 2),
 			},
 		);
-		const client = new CanopyClient({ config: CFG, spawn });
+		const client = CanopyClient.forLibrary({ config: CFG, spawn });
 		const { context, out, err } = captureContext();
 
 		const result = await runRegisterAgent(
@@ -116,7 +116,7 @@ describe("runRegisterAgent", () => {
 			},
 			{},
 		);
-		const client = new CanopyClient({ config: CFG, spawn });
+		const client = CanopyClient.forLibrary({ config: CFG, spawn });
 		const { context, out, err } = captureContext();
 
 		const result = await runRegisterAgent(
@@ -144,7 +144,7 @@ describe("runRegisterAgent", () => {
 				broken: { success: true, command: "render", name: "broken", version: 1, sections: [] },
 			},
 		);
-		const client = new CanopyClient({ config: CFG, spawn });
+		const client = CanopyClient.forLibrary({ config: CFG, spawn });
 		const { context, err } = captureContext();
 
 		const result = await runRegisterAgent(

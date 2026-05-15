@@ -220,7 +220,7 @@ function refreshAgents(deps: ServerDeps): RouteHandler {
 			});
 		}
 		const canopyConfig = deps.canopyConfig;
-		const client = new CanopyClient({ config: canopyConfig, spawn: defaultSpawn });
+		const client = CanopyClient.forLibrary({ config: canopyConfig, spawn: defaultSpawn });
 		const result = await refreshAgentRegistry({
 			client,
 			agents: deps.repos.agents,

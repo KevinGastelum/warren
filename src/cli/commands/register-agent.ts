@@ -46,7 +46,8 @@ export async function runRegisterAgent(
 	}
 
 	const live =
-		deps.canopyClient ?? new CanopyClient({ config: deps.canopyConfig, spawn: context.spawn });
+		deps.canopyClient ??
+		CanopyClient.forLibrary({ config: deps.canopyConfig, spawn: context.spawn });
 	const filtered = filterToOne(live, args.name);
 
 	let result: RefreshResult;
