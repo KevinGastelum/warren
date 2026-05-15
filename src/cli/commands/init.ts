@@ -98,7 +98,7 @@ const CONFIG_HEADER = `# .warren/config.yaml — per-project warren defaults (wa
 #
 # Supersedes the legacy .warren/defaults.json. Fields are all optional;
 # every key from the JSON layout works here unchanged. See SPEC §11.H
-# for the schema and .warren/MIGRATION.md for before/after examples.
+# for the schema. Moving from defaults.json? Run \`warren config migrate\`.
 `;
 
 export async function runInit(

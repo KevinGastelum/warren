@@ -1339,7 +1339,8 @@ canonical layout is one file per concern (`config.yaml`, `preview.yaml`,
 `triggers.yaml`, `pr-template.md`); the legacy `defaults.json` still
 loads with a deprecation warning, and `warren config migrate` converts
 an existing install in place. See §11.H for the loader precedence and
-`.warren/MIGRATION.md` for before/after examples.
+the schemas in `src/warren-config/schema.ts` for the field-by-field
+shape.
 
 **Routing modes — path vs subdomain (warren-f4d7, pl-f4ea, 2026-05-15).**
 The original §11.L lock above describes subdomain-mode routing

@@ -159,7 +159,7 @@ When a project ships a `.warren/preview.yaml`, warren launches `preview.command`
    max_lifetime: 8h
    ```
 
-   Projects that don't opt in skip the preview sub-step entirely. The block also still works nested under `preview:` in `.warren/config.yaml` for projects that keep everything in one file. See [SPEC §11.L](SPEC.md#11l-per-run-preview-environments-2026-05-14) for the full contract and [`.warren/MIGRATION.md`](.warren/MIGRATION.md) if you're moving from the legacy `defaults.json`.
+   Projects that don't opt in skip the preview sub-step entirely. The block also still works nested under `preview:` in `.warren/config.yaml` for projects that keep everything in one file. See [SPEC §11.L](SPEC.md#11l-per-run-preview-environments-2026-05-14) for the full contract. Moving from the legacy `defaults.json`? Run `warren config migrate` — it converts in place and refuses to clobber existing YAML.
 
 ## Per-run previews — operator setup
 
