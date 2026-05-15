@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.4] — 2026-05-14
+
+Cleanup release on top of v0.3.3 — finishes the dialect-polymorphic
+repo migration started under R-13 by porting the two preview modules
+the original plan had deferred (`PreviewPortAllocator`, `RunPreviewsRepo`),
+closes the Supabase RLS advisory on the live dogfood by enabling
+row-level security on all seven public tables, bakes `pnpm` and `npm`
+into the runtime image so non-bun preview sidecars can boot, and
+locks in the Fly + Supabase dogfood that proved the v0.3.3 Postgres
+path end-to-end.
+
 ### Fixed
 
 - **`fix(db)`** — complete R-13 end-to-end Postgres support (`pl-f1be`,
@@ -31,7 +42,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   end-to-end against a real Postgres rather than skipping on missing
   `WARREN_TEST_PG_URL`. Closes `warren-5549`.
 
-- **`chore(dogfood)`** — Fly + Supabase dogfood (`warren-f451`,
+- **`fix(preview)`** — port allocator + `RunPreviewsRepo` to the
+  dialect-polymorphic adapter (`warren-adfb`). The R-13 plan deferred
+  these two modules from the dialect-aware repo migration; until now
+  `src/server/main.ts` only constructed them when
+  `db.dialect === "sqlite"`, so a pg-deployed warren silently skipped
+  `preview_launch` in reap and never emitted any preview events for
+  projects with `.warren/preview.yaml`. Both modules now take a
+  `DrizzleAdapter` and run on either backend: `PreviewPortAllocator`
+  uses `runInTransaction` with a per-instance Promise-chain mutex
+  (`allocateChain`) for in-process serialization plus
+  `pg_advisory_xact_lock` inside the tx for cross-process serialization
+  on pg; `createRunPreviewsRepo` evicts via single-statement CAS
+  (`UPDATE ... WHERE state IN ('starting','live') RETURNING {id}`) and
+  serializes `claimTeardown` via `SELECT ... FOR UPDATE` on pg + the
+  natural single-connection serialization on sqlite. The dialect-skip
+  branches in `previewPortAllocatorReadyzCheck`,
+  `previewMaxLiveReadyzCheck`, and `cli/commands/doctor.ts` are
+  removed; tests for both modules now follow the dialect-polymorphic
+  pattern (`mx-1d9f7a`) and run against pg when `WARREN_TEST_PG_URL`
+  is set. Unblocks `warren-724e` (per-run preview sidecar dogfood on
+  jayminwest.com).
+
+- **`fix(db)`** — enable RLS on Postgres tables (`warren-b778`).
+  Closes the Supabase "RLS not enabled" advisory on the
+  warren-deployed dogfood. Hand-rolled migration
+  `src/db/migrations/postgres/0002_enable_rls.sql` runs
+  `ALTER TABLE ... ENABLE ROW LEVEL SECURITY` for the 7 public tables
+  (`agents`, `burrows`, `events`, `projects`, `runs`, `triggers`,
+  `workers`). Warren itself connects as the postgres superuser via
+  `WARREN_DB_URL` and bypasses RLS for owners/superusers (no
+  `FORCE ROW LEVEL SECURITY`), so app code is unaffected; PostgREST
+  anon/authenticated traffic now sees deny-all (zero policies, RLS on).
+  SQLite path is untouched — RLS is pg-only. The drift test
+  (`src/db/schema/drift.test.ts`) passes because it compares column
+  shape, not policies. Already applied to live Supabase (project
+  `biaxgkadzaruhrqsjnmi`); the boot-time migrator will no-op on next
+  redeploy since pg treats `ENABLE ROW LEVEL SECURITY` as idempotent.
+
+### Changed
+
+- **`build`** — bake `pnpm` and `npm` into the warren `Dockerfile`
+  (`warren-810f`). Preview sidecars (R-19 / SPEC §11.L) run
+  user-defined commands like `pnpm dev` / `npm run dev` inside the
+  burrow sandbox. The image only shipped `bun`, so projects that
+  don't use bun (e.g. `jayminwest.com` under `warren-724e`) couldn't
+  boot a preview. Adds `pnpm@11.1.2` and `npm@11.14.1` to the
+  existing `bun install -g` line alongside the other JS CLIs; they
+  reuse the `/usr/local/bin/node` bun-shim already installed for pi
+  compat (`mx-27f385`).
+
+- **`chore(dogfood)`** — Fly + Supabase dogfood lockdown (`warren-f451`,
   `pl-f1be` step 10): `warren-deployed.fly.dev` redeployed with
   `WARREN_DB_URL=postgres://...supabase.co` set as a Fly secret;
   `/readyz` reports `db_reachable.dialect=postgres` and `ok:true`
