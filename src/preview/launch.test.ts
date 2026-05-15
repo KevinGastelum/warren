@@ -4,6 +4,7 @@ import { DrizzleAdapter } from "../db/repos/drizzle-adapter.ts";
 import { createRepos, type Repos } from "../db/repos/index.ts";
 import type { ServerPreviewConfig } from "../warren-config/index.ts";
 import {
+	DEFAULT_READINESS_TIMEOUT_MS,
 	formatPreviewUrl,
 	launchPreview,
 	loadPreviewLaunchConfigFromEnv,
@@ -281,6 +282,46 @@ describe("launchPreview", () => {
 		expect(row.previewPort).toBeNull();
 		expect(row.previewFailureMessage).toContain("readiness probe");
 		expect(row.previewFailureMessage).toContain("TypeError");
+	});
+
+	// warren-0928: cold pnpm/npm installs commonly exceed 60s; the new default
+	// covers the install + bind window so happy-path startup doesn't fail on
+	// first-time runs.
+	test("DEFAULT_READINESS_TIMEOUT_MS is 5 minutes", () => {
+		expect(DEFAULT_READINESS_TIMEOUT_MS).toBe(300_000);
+	});
+
+	test("respects injected readinessTimeoutMs over the default deadline", async () => {
+		// Hold the clock fixed and feed enough 502s to exhaust the override
+		// (10ms / 100ms poll = 1 attempt, no further attempts before deadline).
+		// The 5m default would mean ~3000 attempts — any non-default ceiling
+		// pulled from the input must actually shorten the loop.
+		const sidecars = fakeSidecars({ stdout: "", stderr: "compile error\n" });
+		const t0 = new Date("2026-05-14T18:00:00.000Z").getTime();
+		let ticks = 0;
+		const now = (): Date => new Date(t0 + ticks);
+		const { fetch, calls } = fakeFetch([
+			new Response("502", { status: 502 }),
+			new Response("502", { status: 502 }),
+		]);
+		const result = await launchPreview({
+			runId,
+			burrowId,
+			previewConfig: PREVIEW_CONFIG,
+			repos,
+			allocator,
+			sidecars: sidecars.client,
+			fetch,
+			sleep: async (ms) => {
+				ticks += ms * 10; // advance fast so the loop exits in O(1) probes
+			},
+			now,
+			readinessTimeoutMs: 50,
+			readinessPollMs: 100,
+		});
+		expect(result.ok).toBe(false);
+		expect((result as { reason: string }).reason).toBe("readiness_timeout");
+		expect(calls.length).toBeLessThan(5);
 	});
 
 	test("falls back to stdout tail when stderr is empty", async () => {

@@ -1105,8 +1105,33 @@ describe("reapRun", () => {
 		expect(result.previewPort).toBe(40000);
 		expect(launch.calls).toHaveLength(1);
 		expect(launch.calls[0]?.previewConfig.command).toBe("bun run dev");
+		// warren-0928: no per-project override → reap omits readinessTimeoutMs
+		// so the launcher uses DEFAULT_READINESS_TIMEOUT_MS.
+		expect(launch.calls[0]?.readinessTimeoutMs).toBeUndefined();
 		const events = await ctx.repos.events.listByRun(ctx.runId);
 		expect(events.find((ev) => ev.kind === "preview_launched")).toBeDefined();
+	});
+
+	// warren-0928: per-project readiness_timeout flows from .warren/preview.yaml
+	// through reap into the launcher as milliseconds. The schema validated the
+	// string at load time, so reap parses with parseDurationMs unconditionally.
+	test("forwards previewConfig.readiness_timeout as launcher readinessTimeoutMs", async () => {
+		const e = fakeExec({ revListCount: "2" });
+		const launch = fakeLaunch([{ ok: true, port: 40000, sidecarId: "sc_1" }]);
+		await reapRun({
+			runId: ctx.runId,
+			outcome: "succeeded",
+			repos: ctx.repos,
+			burrowClientPool: await makePool(fakeBurrowClient(makeBurrow()), ctx.repos),
+			broker: ctx.broker,
+			fs: fakeFs().fs,
+			exec: e.exec,
+			previewConfig: { ...SERVER_PREVIEW, readiness_timeout: "10m" },
+			portAllocator: new PreviewPortAllocator(DrizzleAdapter.for(ctx.db)),
+			launchPreview: launch.launch,
+		});
+		expect(launch.calls).toHaveLength(1);
+		expect(launch.calls[0]?.readinessTimeoutMs).toBe(600_000);
 	});
 
 	test("skips preview launch when project did not opt in (no previewConfig)", async () => {

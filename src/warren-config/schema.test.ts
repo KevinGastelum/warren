@@ -249,6 +249,39 @@ describe("PreviewConfigSchema", () => {
 		}
 	});
 
+	// warren-0928: readiness_timeout is shape-validated like idle_ttl but
+	// additionally bounded 1s..1h so pathological config (sub-poll polls,
+	// >1h ceilings) surfaces at load time rather than reap time.
+	test("accepts readiness_timeout within 1s..1h", () => {
+		for (const d of ["1s", "30s", "5m", "1h", "59m59s"]) {
+			const parsed = PreviewConfigSchema.safeParse({
+				...VALID_SERVER_PREVIEW,
+				readiness_timeout: d,
+			});
+			expect(parsed.success).toBe(true);
+		}
+	});
+
+	test("rejects readiness_timeout under 1s", () => {
+		for (const d of ["500ms", "999ms"]) {
+			const parsed = PreviewConfigSchema.safeParse({
+				...VALID_SERVER_PREVIEW,
+				readiness_timeout: d,
+			});
+			expect(parsed.success).toBe(false);
+		}
+	});
+
+	test("rejects readiness_timeout over 1h", () => {
+		for (const d of ["2h", "1h1s", "1d"]) {
+			const parsed = PreviewConfigSchema.safeParse({
+				...VALID_SERVER_PREVIEW,
+				readiness_timeout: d,
+			});
+			expect(parsed.success).toBe(false);
+		}
+	});
+
 	test("rejects strict-extra fields on server preview so typos surface loudly", () => {
 		const parsed = PreviewConfigSchema.safeParse({
 			...VALID_SERVER_PREVIEW,

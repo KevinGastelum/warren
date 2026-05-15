@@ -83,6 +83,7 @@ import { withTransportMapping } from "../burrow-client/client.ts";
 import type { BurrowClientPool } from "../burrow-client/pool.ts";
 import type { Repos } from "../db/repos/index.ts";
 import type { EventRow, RunFailureReason, RunTerminalState } from "../db/schema.ts";
+import { parseDurationMs } from "../preview/duration.ts";
 import {
 	formatPreviewUrl,
 	type LaunchPreviewInput,
@@ -548,6 +549,13 @@ export async function reapRun(input: ReapRunInput): Promise<ReapRunResult> {
 				});
 			} else {
 				try {
+					// warren-0928: per-project override of the readiness probe
+					// wall clock. The schema validated shape + bounds at load
+					// time, so parseDurationMs is infallible here.
+					const readinessTimeoutMs =
+						input.previewConfig.readiness_timeout !== undefined
+							? parseDurationMs(input.previewConfig.readiness_timeout)
+							: undefined;
 					const result = await (input.launchPreview ?? launchPreview)({
 						runId: run.id,
 						burrowId: run.burrowId,
@@ -556,6 +564,7 @@ export async function reapRun(input: ReapRunInput): Promise<ReapRunResult> {
 						allocator: input.portAllocator,
 						sidecars: workerClient.http.sidecars,
 						now,
+						...(readinessTimeoutMs !== undefined ? { readinessTimeoutMs } : {}),
 					});
 					if (result.ok) {
 						previewLaunchState = "live";

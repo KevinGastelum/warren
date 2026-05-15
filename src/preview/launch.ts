@@ -111,8 +111,14 @@ export type LaunchFailureReason =
 	| "readiness_timeout"
 	| "sidecar_exited";
 
-/** Default readiness probe wall clock. Generous so a cold `bun run dev` compile completes. */
-export const DEFAULT_READINESS_TIMEOUT_MS = 60_000;
+/**
+ * Default readiness probe wall clock. Sized to cover a cold `pnpm install` +
+ * dev-server bind for projects with hundreds of deps (warren-0928); the probe
+ * returns on first 2xx, so a larger ceiling only delays failure reporting and
+ * doesn't slow the happy path. Override per-project via
+ * `.warren/preview.yaml`'s `readiness_timeout`.
+ */
+export const DEFAULT_READINESS_TIMEOUT_MS = 300_000;
 /** Default pause between probe attempts. */
 export const DEFAULT_READINESS_POLL_MS = 500;
 /** Stderr tail size copied into `preview_failure_message`. */

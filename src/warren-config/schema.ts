@@ -41,6 +41,7 @@
  */
 
 import { z } from "zod";
+import { parseDurationMs } from "../preview/duration.ts";
 
 const TriggerIdSchema = z
 	.string()
@@ -120,6 +121,20 @@ const PreviewReadinessPathSchema = z
 	.min(1, "preview.readiness_path must be non-empty if provided")
 	.regex(/^\//, "preview.readiness_path must start with '/'");
 
+// warren-0928: per-project override of the readiness probe wall clock. Bounds
+// rule out pathological config (sub-second polls aren't meaningful given the
+// 500ms default poll interval, and >1h is almost certainly a typo since the
+// probe returns on first 2xx — larger ceilings only delay failure reporting).
+// Operators who genuinely need >1h should file a follow-up so the upper bound
+// gets revisited with a concrete use case.
+const PreviewReadinessTimeoutSchema = DurationStringSchema.refine(
+	(value) => {
+		const ms = parseDurationMs(value);
+		return ms >= 1_000 && ms <= 3_600_000;
+	},
+	{ message: "preview.readiness_timeout must be between 1s and 1h" },
+);
+
 // warren-fcb7 / SPEC §11.L (path-mode addendum, pl-f4ea): per-project pin of
 // the preview routing mode. Operator-facing surface is `WARREN_PREVIEW_MODE`
 // in env; this top-level field on `.warren/preview.yaml` lets a project
@@ -145,6 +160,7 @@ const ServerPreviewConfigSchema = z
 		command: PreviewCommandSchema,
 		port: PreviewPortSchema,
 		readiness_path: PreviewReadinessPathSchema.optional(),
+		readiness_timeout: PreviewReadinessTimeoutSchema.optional(),
 		idle_ttl: DurationStringSchema.optional(),
 		max_lifetime: DurationStringSchema.optional(),
 	})
