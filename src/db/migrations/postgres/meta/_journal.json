@@ -15,6 +15,13 @@
 			"when": 1778780879272,
 			"tag": "0001_add_run_preview_columns",
 			"breakpoints": true
+		},
+		{
+			"idx": 2,
+			"version": "7",
+			"when": 1778803976000,
+			"tag": "0002_enable_rls",
+			"breakpoints": true
 		}
 	]
 }
