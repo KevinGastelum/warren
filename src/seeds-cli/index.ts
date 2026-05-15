@@ -3,13 +3,12 @@
  * here so the file layout under `seeds-cli/` can shift without
  * rippling out to call sites (mirrors src/warren-config/ + src/runs/).
  *
- * Today the facade owns:
+ * The facade owns:
  *   - the seeds `sd list` / `sd update --extensions` envelope schema
- *   - `listScheduledSeeds` + `clearScheduledFor` operations used by the
+ *   - `listScheduledSeeds` / `clearScheduledFor` operations used by the
  *     R-06 cron tick
- *
- * R-01 step 2 adds `updateExtensions` plus a typed warren-namespaced
- * extensions schema; both will export from here.
+ *   - `updateExtensions` + the warren-namespaced extensions schema
+ *     (R-01 producer side, pl-bb70 step 2)
  */
 
 export { SeedsCliError } from "./errors.ts";
@@ -17,6 +16,7 @@ export {
 	clearScheduledFor,
 	listScheduledSeeds,
 	type SeedsCliDeps,
+	updateExtensions,
 } from "./extensions.ts";
 export {
 	type ParseScheduledSeedsResult,
@@ -26,3 +26,8 @@ export {
 	type SeedsListEnvelope,
 	SeedsListEnvelopeSchema,
 } from "./schema.ts";
+export {
+	type WarrenExtensions,
+	WarrenExtensionsSchema,
+	WarrenTriggerKind,
+} from "./warren-extensions.ts";

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { SpawnFn, SpawnResult } from "../projects/clone.ts";
 import { SeedsCliError } from "./errors.ts";
-import { clearScheduledFor, listScheduledSeeds } from "./extensions.ts";
+import { clearScheduledFor, listScheduledSeeds, updateExtensions } from "./extensions.ts";
 
 function ok(stdout: string): SpawnResult {
 	return { stdout, stderr: "", exitCode: 0 };
@@ -94,5 +94,112 @@ describe("clearScheduledFor", () => {
 		await expect(
 			clearScheduledFor({ spawn, sdBinary: "sd" }, "/p", "warren-abc", "run_xyz"),
 		).rejects.toBeInstanceOf(SeedsCliError);
+	});
+});
+
+describe("updateExtensions", () => {
+	test("shells out to sd update with the validated payload", async () => {
+		const calls: { cmd: readonly string[]; cwd: string }[] = [];
+		const spawn: SpawnFn = async (cmd, opts) => {
+			calls.push({ cmd, cwd: opts.cwd });
+			return ok("{}");
+		};
+		await updateExtensions({ spawn, sdBinary: "/opt/sd" }, "/data/projects/x/y", "warren-abc", {
+			role: "claude-code",
+			trigger: "manual",
+			lastRunId: "run_xyz",
+			lastRunAt: "2026-05-15T15:30:00.000Z",
+		});
+		expect(calls).toHaveLength(1);
+		const call = calls[0];
+		if (call === undefined) throw new Error("expected one spawn call");
+		expect(call.cwd).toBe("/data/projects/x/y");
+		expect(call.cmd[0]).toBe("/opt/sd");
+		expect(call.cmd[1]).toBe("update");
+		expect(call.cmd[2]).toBe("warren-abc");
+		expect(call.cmd[3]).toBe("--extensions");
+		expect(JSON.parse(call.cmd[4] ?? "{}")).toEqual({
+			role: "claude-code",
+			trigger: "manual",
+			lastRunId: "run_xyz",
+			lastRunAt: "2026-05-15T15:30:00.000Z",
+		});
+	});
+
+	test("supports the cron clear + lastRun merge in a single write", async () => {
+		const calls: { cmd: readonly string[] }[] = [];
+		const spawn: SpawnFn = async (cmd) => {
+			calls.push({ cmd });
+			return ok("{}");
+		};
+		await updateExtensions({ spawn, sdBinary: "sd" }, "/p", "warren-abc", {
+			role: "claude-code",
+			trigger: "cron",
+			lastRunId: "run_xyz",
+			lastRunAt: "2026-05-15T15:30:00.000Z",
+			scheduledFor: null,
+			lastScheduledRun: "run_xyz",
+		});
+		expect(calls).toHaveLength(1);
+		expect(JSON.parse(calls[0]?.cmd[4] ?? "{}")).toEqual({
+			role: "claude-code",
+			trigger: "cron",
+			lastRunId: "run_xyz",
+			lastRunAt: "2026-05-15T15:30:00.000Z",
+			scheduledFor: null,
+			lastScheduledRun: "run_xyz",
+		});
+	});
+
+	test("rejects an invalid trigger string without shelling out", async () => {
+		const calls: { cmd: readonly string[] }[] = [];
+		const spawn: SpawnFn = async (cmd) => {
+			calls.push({ cmd });
+			return ok("{}");
+		};
+		await expect(
+			updateExtensions({ spawn, sdBinary: "sd" }, "/p", "warren-abc", {
+				trigger: "manual-trigger",
+			} as unknown as Parameters<typeof updateExtensions>[3]),
+		).rejects.toBeInstanceOf(SeedsCliError);
+		expect(calls).toEqual([]);
+	});
+
+	test("rejects unknown keys (strict schema) without shelling out", async () => {
+		const calls: { cmd: readonly string[] }[] = [];
+		const spawn: SpawnFn = async (cmd) => {
+			calls.push({ cmd });
+			return ok("{}");
+		};
+		await expect(
+			updateExtensions({ spawn, sdBinary: "sd" }, "/p", "warren-abc", {
+				notAWarrenKey: "value",
+			} as unknown as Parameters<typeof updateExtensions>[3]),
+		).rejects.toBeInstanceOf(SeedsCliError);
+		expect(calls).toEqual([]);
+	});
+
+	test("throws SeedsCliError on a non-zero exit", async () => {
+		const spawn: SpawnFn = async () => fail("seeds: no such issue warren-abc");
+		await expect(
+			updateExtensions({ spawn, sdBinary: "sd" }, "/p", "warren-abc", {
+				role: "claude-code",
+				trigger: "manual",
+			}),
+		).rejects.toBeInstanceOf(SeedsCliError);
+	});
+
+	test("clearScheduledFor still merges {scheduledFor:null, lastScheduledRun} via updateExtensions", async () => {
+		const calls: { cmd: readonly string[] }[] = [];
+		const spawn: SpawnFn = async (cmd) => {
+			calls.push({ cmd });
+			return ok("{}");
+		};
+		await clearScheduledFor({ spawn, sdBinary: "sd" }, "/p", "warren-abc", "run_xyz");
+		expect(calls).toHaveLength(1);
+		expect(JSON.parse(calls[0]?.cmd[4] ?? "{}")).toEqual({
+			scheduledFor: null,
+			lastScheduledRun: "run_xyz",
+		});
 	});
 });

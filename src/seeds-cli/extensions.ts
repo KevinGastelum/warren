@@ -28,6 +28,7 @@ import {
 	parseScheduledSeeds,
 	SeedsListEnvelopeSchema,
 } from "./schema.ts";
+import { type WarrenExtensions, WarrenExtensionsSchema } from "./warren-extensions.ts";
 
 export interface SeedsCliDeps {
 	readonly sdBinary: string;
@@ -92,8 +93,41 @@ export async function clearScheduledFor(
 	seedId: string,
 	runId: string,
 ): Promise<void> {
-	const extensions = JSON.stringify({ scheduledFor: null, lastScheduledRun: runId });
-	const result = await deps.spawn([deps.sdBinary, "update", seedId, "--extensions", extensions], {
+	await updateExtensions(deps, projectPath, seedId, {
+		scheduledFor: null,
+		lastScheduledRun: runId,
+	});
+}
+
+/**
+ * Merge warren-namespaced keys into a seed's `extensions` via
+ * `sd update <id> --extensions <json>`. Seeds applies a shallow merge,
+ * so this call only touches the keys present in `extensions` — `null`
+ * clears, missing keys are left alone, and concurrent operator edits to
+ * disjoint keys are safe (pl-bb70 risk #2).
+ *
+ * The payload is validated against `WarrenExtensionsSchema` before the
+ * shell-out so bogus trigger strings or unknown keys fail fast with a
+ * `SeedsCliError` rather than persisting into seeds and rotting the
+ * convention. Callers that need a clear-on-not-set semantic should pass
+ * `null` explicitly.
+ */
+export async function updateExtensions(
+	deps: SeedsCliDeps,
+	projectPath: string,
+	seedId: string,
+	extensions: WarrenExtensions,
+): Promise<void> {
+	const parsed = WarrenExtensionsSchema.safeParse(extensions);
+	if (!parsed.success) {
+		throw new SeedsCliError(
+			`updateExtensions payload did not match the warren-namespaced schema: ${parsed.error.issues
+				.map((i) => `${i.path.join(".") || "<root>"}: ${i.message}`)
+				.join("; ")}`,
+		);
+	}
+	const payload = JSON.stringify(parsed.data);
+	const result = await deps.spawn([deps.sdBinary, "update", seedId, "--extensions", payload], {
 		cwd: projectPath,
 		timeoutMs: deps.timeoutMs ?? DEFAULT_SD_TIMEOUT_MS,
 	});
