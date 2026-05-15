@@ -29,8 +29,13 @@ export interface AgentRow {
 	renderedJson: unknown;
 	registeredAt: string;
 	lastRefreshed: string;
-	/** Provenance decorated by the server (warren-f6ad / readAgentSource). */
-	source?: "builtin" | "library";
+	/**
+	 * Provenance decorated by the server (warren-f6ad / readAgentSource).
+	 * R-03 (pl-fef5) widened this from `"builtin" | "library"` to also
+	 * include `project:<projectId>` for the per-project `.canopy/` tier;
+	 * UI surfaces classify by the `project:` prefix.
+	 */
+	source?: "builtin" | "library" | `project:${string}`;
 }
 
 export interface ProjectRow {

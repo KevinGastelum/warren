@@ -6,15 +6,25 @@
 
 export {
 	type AgentSource,
+	type AgentSourceTier,
+	agentSourceTier,
 	BUILTIN_AGENT_NAMES,
 	BUILTIN_AGENT_SOURCE,
 	BUILTIN_AGENTS,
+	type BuiltinAgentSource,
 	CLAUDE_CODE_BUILTIN,
+	isProjectAgentSource,
 	LIBRARY_AGENT_SOURCE,
+	type LibraryAgentSource,
+	makeProjectAgentSource,
+	PROJECT_AGENT_SOURCE_PREFIX,
+	type ProjectAgentSource,
+	projectIdFromAgentSource,
 	readAgentSource,
 	SAPLING_BUILTIN,
 	type SeedBuiltinAgentsResult,
 	seedBuiltinAgents,
+	stampAgentSource,
 } from "./builtins/index.ts";
 export {
 	type AgentSummary,
