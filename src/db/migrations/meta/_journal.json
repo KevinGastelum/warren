@@ -71,6 +71,13 @@
 			"when": 1778780879006,
 			"tag": "0009_add_run_preview_columns",
 			"breakpoints": true
+		},
+		{
+			"idx": 10,
+			"version": "6",
+			"when": 1778858238069,
+			"tag": "0010_add_run_seed_id",
+			"breakpoints": true
 		}
 	]
 }

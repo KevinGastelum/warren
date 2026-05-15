@@ -54,6 +54,15 @@ export interface CreateRunInput {
 	 * rows written before pl-9ba1 step 4 wired this in.
 	 */
 	workerId?: string | null;
+	/**
+	 * Back-link to the seeds issue this run was dispatched against
+	 * (pl-bb70 step 3). Optional; null encodes "no seed" (manual prompt,
+	 * legacy row). Persisted so the post-dispatch `updateExtensions`
+	 * write (pl-bb70 step 4) has the seed to merge {role, trigger,
+	 * lastRunId, lastRunAt} into and so the Run API can surface a
+	 * back-link on RunDetail (pl-bb70 step 6).
+	 */
+	seedId?: string | null;
 	now?: Date;
 }
 
@@ -98,6 +107,7 @@ export class RunsRepo {
 			burrowId: input.burrowId ?? null,
 			burrowRunId: input.burrowRunId ?? null,
 			workerId: input.workerId ?? null,
+			seedId: input.seedId ?? null,
 			renderedAgentJson: input.renderedAgentJson,
 			state: "queued",
 			failureReason: null,

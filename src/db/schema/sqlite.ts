@@ -75,6 +75,14 @@ export const runs = sqliteTable(
 		// this column landed; new rows always set it once `BurrowClientPool`
 		// (step 3) and the spawn wiring (step 4) land.
 		workerId: text("worker_id"),
+		// Optional back-link to the seeds issue this run was dispatched against
+		// (pl-bb70 step 3, warren-805a). Threaded through POST /runs → spawnRun →
+		// runs row so the post-dispatch `updateExtensions` write (pl-bb70 step 4)
+		// has a seed to merge {role, trigger, lastRunId, lastRunAt} into.
+		// Nullable: legacy rows and runs dispatched without a seed leave it null.
+		// Plain text (no FK to seeds) — seeds live in the project workspace, not
+		// in warren's database, and the seed-id space is per-project.
+		seedId: text("seed_id"),
 		renderedAgentJson: text("rendered_agent_json", { mode: "json" }).notNull(),
 		state: text("state", { enum: RUN_STATES }).notNull(),
 		failureReason: text("failure_reason", { enum: RUN_FAILURE_REASONS }),

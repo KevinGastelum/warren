@@ -252,6 +252,79 @@ describe("POST /runs — spawn flow", () => {
 		expect(calls.some((c) => c.path === "/burrows/bur_xxxxxxxxxxxx/runs")).toBe(true);
 	});
 
+	test("optional seedId persists onto runs.seed_id (warren-805a)", async () => {
+		const project = (await repos.projects.listAll())[0];
+		if (!project) throw new Error("project missing");
+
+		const { mkdtemp } = await import("node:fs/promises");
+		const { tmpdir } = await import("node:os");
+		const { join } = await import("node:path");
+		const tmpWs = await mkdtemp(join(tmpdir(), "warren-handlers-seedid-"));
+
+		const calls: { method: string; path: string; body: unknown }[] = [];
+		const burrowClient = makeBurrowClient(
+			{ burrowId: "bur_seed00000000", burrowRunId: "run_seedrun00000", workspacePath: tmpWs },
+			calls,
+		);
+		const deps = await depsFor(repos, burrowClient);
+		handle = startServer(deps, {
+			transport: { kind: "tcp", hostname: "127.0.0.1", port: 0 },
+			auth: NO_AUTH,
+			logger: silentLogger,
+		});
+
+		const res = await fetch(`${tcpUrl(handle)}/runs`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({
+				agent: "refactor-bot",
+				project: project.id,
+				prompt: "hello",
+				seedId: "warren-805a",
+			}),
+		});
+		expect(res.status).toBe(201);
+		const body = (await res.json()) as { run: { id: string } };
+		const persisted = await repos.runs.require(body.run.id);
+		expect(persisted.seedId).toBe("warren-805a");
+	});
+
+	test("seedId omitted → runs.seed_id stays null", async () => {
+		const project = (await repos.projects.listAll())[0];
+		if (!project) throw new Error("project missing");
+
+		const { mkdtemp } = await import("node:fs/promises");
+		const { tmpdir } = await import("node:os");
+		const { join } = await import("node:path");
+		const tmpWs = await mkdtemp(join(tmpdir(), "warren-handlers-noseed-"));
+
+		const calls: { method: string; path: string; body: unknown }[] = [];
+		const burrowClient = makeBurrowClient(
+			{ burrowId: "bur_noseed0000000", burrowRunId: "run_noseedrun0000", workspacePath: tmpWs },
+			calls,
+		);
+		const deps = await depsFor(repos, burrowClient);
+		handle = startServer(deps, {
+			transport: { kind: "tcp", hostname: "127.0.0.1", port: 0 },
+			auth: NO_AUTH,
+			logger: silentLogger,
+		});
+
+		const res = await fetch(`${tcpUrl(handle)}/runs`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({
+				agent: "refactor-bot",
+				project: project.id,
+				prompt: "hello",
+			}),
+		});
+		expect(res.status).toBe(201);
+		const body = (await res.json()) as { run: { id: string } };
+		const persisted = await repos.runs.require(body.run.id);
+		expect(persisted.seedId).toBeNull();
+	});
+
 	test("missing required field → 400 validation_error", async () => {
 		const calls: { method: string; path: string; body: unknown }[] = [];
 		const burrowClient = makeBurrowClient(

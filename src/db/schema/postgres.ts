@@ -65,6 +65,7 @@ export const runs = pgTable(
 		burrowId: text("burrow_id"),
 		burrowRunId: text("burrow_run_id"),
 		workerId: text("worker_id"),
+		seedId: text("seed_id"),
 		renderedAgentJson: jsonb("rendered_agent_json").notNull(),
 		state: text("state", { enum: RUN_STATES }).notNull(),
 		failureReason: text("failure_reason", { enum: RUN_FAILURE_REASONS }),

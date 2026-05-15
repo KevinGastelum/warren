@@ -90,6 +90,15 @@ export interface SpawnRunInput {
 	readonly projectId: string;
 	readonly prompt: string;
 	readonly trigger?: string;
+	/**
+	 * Optional seeds issue id this run was dispatched against (pl-bb70
+	 * step 3, warren-805a). Persisted on the runs row as `seed_id`, so
+	 * the post-dispatch `updateExtensions` write (pl-bb70 step 4) has a
+	 * seed to merge `{role, trigger, lastRunId, lastRunAt}` into and the
+	 * Run API can surface a back-link on RunDetail (pl-bb70 step 6).
+	 * Manual prompts and legacy callers leave it undefined → null on disk.
+	 */
+	readonly seedId?: string;
 	readonly metadata?: unknown;
 	/**
 	 * Optional per-run override of the agent's `frontmatter.provider`. When
@@ -213,6 +222,7 @@ export async function spawnRun(input: SpawnRunInput): Promise<SpawnRunResult> {
 		renderedAgentJson: agent,
 		trigger: input.trigger ?? "manual",
 		workerId: placement.workerName,
+		...(input.seedId !== undefined ? { seedId: input.seedId } : {}),
 		now: input.now?.(),
 	});
 

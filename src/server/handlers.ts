@@ -663,6 +663,7 @@ function createRunHandler(deps: ServerDeps): RouteHandler {
 		const ref = optionalString(body, "ref");
 		const providerOverride = optionalString(body, "providerOverride");
 		const modelOverride = optionalString(body, "modelOverride");
+		const seedId = optionalString(body, "seedId");
 		const result = await spawnRun({
 			repos: deps.repos,
 			burrowClientPool: deps.burrowClientPool,
@@ -676,6 +677,7 @@ function createRunHandler(deps: ServerDeps): RouteHandler {
 			...(ref !== undefined ? { ref } : {}),
 			...(providerOverride !== undefined ? { providerOverride } : {}),
 			...(modelOverride !== undefined ? { modelOverride } : {}),
+			...(seedId !== undefined ? { seedId } : {}),
 			...(deps.warrenConfigs !== undefined ? { warrenConfigs: deps.warrenConfigs } : {}),
 			...(deps.runBranchPrefixDefault !== undefined
 				? { runBranchPrefixDefault: deps.runBranchPrefixDefault }

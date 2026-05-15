@@ -1,0 +1,1 @@
+ALTER TABLE "runs" ADD COLUMN "seed_id" text;
