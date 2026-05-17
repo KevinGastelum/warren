@@ -10,7 +10,7 @@ The fresh-install path is standalone: the built-in `claude-code` agent
 ships inline (`src/registry/builtins/`), so a user with a GitHub URL and
 an Anthropic key can dispatch a run end-to-end with no other tooling.
 
-Warren also bundles four [os-eco](https://github.com/jayminwest/os-eco)
+Warren also bundles five [os-eco](https://github.com/jayminwest/os-eco)
 data-plane tools as **opt-in built-in features**, not required
 infrastructure:
 
@@ -22,6 +22,12 @@ infrastructure:
   Activated by the project having a `.seeds/` directory.
 - **sapling** — alternative steerable coding harness. Ships inline as a
   built-in agent alongside claude-code.
+- **plot** — shared coordination substrate where humans and agents are
+  peer nodes on a per-Plot event log. Activated by the project having a
+  `.plot/` directory **and** the dispatch carrying a `plot_id`; warren
+  injects `PLOT_ID` + `PLOT_ACTOR` into the sandbox, appends
+  `run_dispatched`, and mirrors agent-emitted events at reap. See
+  SPEC §11.O.
 
 Same code, same depth — only the user-facing framing surfaces them as
 opt-in. When you change cross-cutting docs (README, SPEC §1/§2, package

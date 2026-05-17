@@ -17,7 +17,7 @@ V1 scope is the **manual run path** plus the **cron half of the scheduler**: con
 
 Warren is a self-hostable control plane for ephemeral coding agents. A user points it at a GitHub repo, picks an agent, writes a prompt; warren spawns the agent inside a sandbox, streams events back to the UI, lets the user steer mid-run, then pushes the workspace branch. **One container, one volume, one HTTP API, one UI.**
 
-The fresh-install path is standalone: the built-in `claude-code` agent ships inline, so a user with a GitHub URL and an Anthropic key can dispatch a run end-to-end with no other tooling. Two additional coding-agent runtimes ship inline alongside it — `sapling` (steerable harness) and `pi` (multi-provider, with per-run cost reporting). Warren also bundles a small set of [os-eco](https://github.com/jayminwest/os-eco) tools as opt-in built-in features — versioned prompt libraries via canopy, persistent agent memory via mulch, an integrated issue queue via seeds — each surfaced only when the project or operator opts in. The runtime substrate is [burrow](https://github.com/jayminwest/burrow), a sibling process inside the container that warren talks to over a unix socket.
+The fresh-install path is standalone: the built-in `claude-code` agent ships inline, so a user with a GitHub URL and an Anthropic key can dispatch a run end-to-end with no other tooling. Two additional coding-agent runtimes ship inline alongside it — `sapling` (steerable harness) and `pi` (multi-provider, with per-run cost reporting). Warren also bundles a small set of [os-eco](https://github.com/jayminwest/os-eco) tools as opt-in built-in features — versioned prompt libraries via canopy, persistent agent memory via mulch, an integrated issue queue via seeds, and a shared coordination substrate via plot (§11.O) — each surfaced only when the project or operator opts in. The runtime substrate is [burrow](https://github.com/jayminwest/burrow), a sibling process inside the container that warren talks to over a unix socket.
 
 V1 is single-user, single-host: clone warren, `docker compose up`, browser at `localhost:8080`. The same image runs on Fly.io with a volume and three secrets. No cross-tenant story, no SaaS, no auth beyond a bearer token.
 
@@ -49,7 +49,7 @@ In the UI:
 - The **UI**: web frontend served from the same process.
 - The **scheduler**: in-process cron tick + scheduled-seed dispatch (V1, §11.I). Webhook/event-triggered runs deferred to V2.
 
-Warren bundles four os-eco data-plane tools (canopy, mulch, seeds, sapling) as built-in features, but a fresh install does not require a user to adopt any of them — `claude-code` ships inline and reads/writes nothing outside the sandbox. The integrations light up when the operator sets `CANOPY_REPO_URL`, or when a project contains `.mulch/` / `.seeds/`.
+Warren bundles five os-eco data-plane tools (canopy, mulch, seeds, sapling, plot) as built-in features, but a fresh install does not require a user to adopt any of them — `claude-code` ships inline and reads/writes nothing outside the sandbox. The integrations light up when the operator sets `CANOPY_REPO_URL`, or when a project contains `.mulch/` / `.seeds/` / `.plot/`.
 
 ### 2.3 What Warren is not
 
@@ -1686,6 +1686,173 @@ scenario. The seed `warren-38f7` stays open as the implementation
 tracker; closing the design-lock half is intentional so the
 implementation work isn't blocked on re-deriving the design.
 
+### 11.O Plot integration (pl-2047, 2026-05-17)
+
+Phase 1 of `warren-000b` — adopting [Plot](https://github.com/jayminwest/plot)
+as warren's coordination primitive. Plot is the fifth opt-in bundled
+feature alongside canopy, mulch, seeds, and sapling: a project lights it
+up by shipping a `.plot/` directory, and projects without one are
+byte-identical to the pre-change behavior. Phase 1 is the dispatch wiring
+only — the run knows which Plot it belongs to, the agent inside the
+sandbox reads and appends to that Plot via the `plot` CLI, and
+agent-emitted events mirror into warren's event stream tagged with
+`plot_id`. No UI changes yet; Phase 2 (`warren-fcc9`, PlanRun
+composition) and Phase 3 (UI shift to Plot-centric views) follow.
+
+**Why now.** The blog post *Agentic Networks*
+(jayminwest.com/blog/12-agentic-networks) argues for a network topology
+where humans and agents are peer nodes coordinating on a shared Plot
+substrate. Warren's V1 primary coordination unit is the run
+(orchestrator → worker); Plot generalizes that into a multi-actor event
+log per work item. Phase 1 wires the substrate without disturbing
+existing flows.
+
+**Gating (opt-in, mirrors mulch/seeds).** Plot integration is gated on
+two flags being both present:
+
+1. `project.hasPlot` — set by `src/projects/refresh.ts` when the cloned
+   project contains a `.plot/` directory. Detected on the same probe
+   pass as `.mulch/`, `.seeds/`, `.canopy/`, `.pi/`.
+2. `run.plot_id` — optional nullable column on the runs row, accepted on
+   `POST /runs`. Validated at the handler edge: passing `plot_id` against
+   a project with `hasPlot=false` returns a typed 400 *before* any side
+   effect (no row insert, no burrow up). Mirrors the no-half-spawned-state
+   policy.
+
+A project with `.plot/` but a run dispatched without `plot_id` runs
+exactly as before — Plot integration is per-run opt-in even when the
+project supports it.
+
+**Data flow.**
+
+```
+POST /runs { plot_id }
+   │
+   ▼  validate project.hasPlot
+spawnRun
+   │
+   ├─►  burrows.up(.., env={PLOT_ID, PLOT_ACTOR=agent:<name>:<run-id>})
+   │    (sandbox-side `plot get` / `plot append` resolve the right Plot)
+   │
+   ├─►  emitRunDispatchedToPlot      (fire-and-log; failure ≠ spawn failure)
+   │    └─►  appends `run_dispatched` to .plot/pl-<id>.events.jsonl
+   │         actor=user:<handle>, payload={run_id, agent, model, project}
+   │
+   ▼
+[ agent runs; `plot append` writes to workspace .plot/pl-*.events.jsonl ]
+   │
+   ▼  reap (src/runs/reap.ts)
+mergePlotsFromBurrow
+   │
+   ├─►  merge workspace .plot/pl-*.json into project .plot/ (content-addr;
+   │    conflict-on-content emits a `plot.conflict` warren event and
+   │    leaves the project copy untouched)
+   │
+   ├─►  append-only union of .plot/pl-*.events.jsonl deltas (dedupe by
+   │    event id; replay-safe and idempotent)
+   │
+   └─►  mirror agent-emitted decision_made / question_posed /
+        artifact_produced into warren's event stream tagged with plot_id
+        (other event types merge into .plot/ but are not mirrored)
+```
+
+JSONL-tail-at-reap is chosen over a live socket bridge for V1:
+deterministic, no new plumbing, and the loss of live UI updates doesn't
+matter until Phase 3.
+
+**Env contract.** When a run is bound to a Plot, the sandbox env carries
+two variables injected via `burrows.up`:
+
+| Variable | Value | Producer |
+|---|---|---|
+| `PLOT_ID` | `<run.plot_id>` | `composePlotEnv` (`src/runs/spawn.ts`) |
+| `PLOT_ACTOR` | `agent:<agent-name>:<run-id>` | `composePlotEnv` |
+
+The `plot` CLI inside the sandbox (installed globally in the Dockerfile,
+mirroring the `burrow-cli` double-pin rule) reads these on every
+invocation. A run dispatched without `plot_id` gets neither variable —
+the sandbox env is unchanged from the non-Plot path.
+
+**ACL surface (write-side).** Plot's SPEC §6 partitions event types by
+allowed actor. Four event types are `["user"]` only:
+
+- `intent_edited`
+- `status_changed`
+- `attachment_removed`
+- `question_answered`
+
+Warren's `src/plot-client/` facade narrows the agent-actor surface at
+the type level so warren code paths cannot construct these from an
+agent. `AgentPlotHandle` exposes only `AgentAllowedEventType =
+Exclude<PlotEventType, HumansOnlyEventType>` to `append()`, and the four
+mutators that would emit humans-only events (`editIntent`, `setStatus`,
+`detach`, plus the `question_answered` append path) live exclusively on
+`UserPlotHandle`. The `HUMANS_ONLY_EVENT_TYPES` constant is pinned with
+`as const satisfies readonly PlotEventType[]` so a Plot SPEC rename
+fails compilation instead of silently drifting. Defense in depth: Plot
+enforces the same ACL at the library level, but warren refuses to
+construct disallowed events at all — same pattern as `src/burrow-client/`
+narrowing the burrow HTTP surface.
+
+The user-actor write surface from warren itself (currently only
+`run_dispatched` emission) uses `user:<handle>` resolved from the
+dispatching user. Cron-triggered and scheduled-seed dispatches inherit
+the trigger owner's handle; webhook-triggered runs (V2) will follow
+the same rule once the receiver lands.
+
+**Dispatch event payload.**
+
+```json
+{
+  "type": "run_dispatched",
+  "actor": "user:<handle>",
+  "data": {
+    "run_id": "<run-id>",
+    "agent": "<agent-name>",
+    "model": "<frontmatter.model | null>",
+    "project": "<project-id>"
+  }
+}
+```
+
+Emission is fire-and-log: a failure to append (missing `.plot/.index.db`
+on first dispatch, disk full, malformed Plot) emits a
+`plot_run_dispatched_failed` system event on the run and does **not**
+roll the spawn back. The `.index.db` is gitignored and rebuildable —
+when missing, warren best-effort runs `plot rebuild-index` and retries
+once before logging the failure. The dispatch hot-path cost of a
+rebuild is bounded by the project's Plot count; projects with many
+Plots should refresh after `plot init` so the index is warm.
+
+**Acceptance.** Scenario 25 (`scripts/acceptance/scenarios/25-plot-roundtrip.ts`)
+covers the round-trip end-to-end against a real warren+burrow stack:
+
+1. Init a project with `.plot/` containing one Plot.
+2. Dispatch a run with `plot_id`. Assert `PLOT_ID` + `PLOT_ACTOR` reach
+   the sandbox env via an in-sandbox `printenv` snapshot.
+3. Agent runs `plot append` from inside the sandbox; assert the event
+   lands in `.plot/pl-*.events.jsonl` after reap.
+4. Assert `run_dispatched` is present in the Plot's event log.
+5. Assert warren's event stream contains the mirrored agent events
+   tagged with `plot_id`.
+6. Snapshot-compare: dispatching against a project **without** `.plot/`
+   produces an event-stream byte-identical to the pre-change baseline.
+
+**Deferred to later phases.**
+
+- **Phase 2 (`warren-fcc9`):** PlanRun composition — a multi-step run
+  driven by a Plot's open questions and pending intents, where warren
+  composes a sequence of agent runs against the same Plot.
+- **Phase 3:** UI shift from run-centric to Plot-centric — Plot view as
+  the primary surface, runs grouped under their Plot, live event
+  streaming from sandbox `plot append` calls (replacing JSONL-tail-at-reap
+  for the live-UI case).
+- **System actor for non-user dispatch paths:** Plot's actor format
+  documents `user:<handle>` and `agent:<name>[:<run-id>]` only. A
+  dedicated `system:warren` actor for genuinely-unattributable dispatch
+  (e.g. internal maintenance jobs) is not added in Phase 1 — current
+  cron and scheduled-seed paths attribute to the trigger owner's handle.
+
 ---
 
 ## 12. Relationship to other os-eco tools
@@ -1696,6 +1863,7 @@ implementation work isn't blocked on re-deriving the design.
 | **canopy** | Hard dependency. Source of agent definitions. Cloned at startup, refreshed on demand. |
 | **mulch** | Used per-project. Warren reads the project's `.mulch/expertise/` on the host to source `expertise_seed` lines and merges per-run mulch records back during reap (host-side disk write, last-write-wins-by-ts). The per-run `.mulch/` inside the burrow workspace is seeded via the `seed.files` payload on `POST /burrows` (R-07; see §11.A) — warren never shells out to `ml record` inside the sandbox. |
 | **seeds** | Used per-project. Warren reads `sd ready` to surface the project's worklist in the UI; agents file/close seeds during runs. |
+| **plot** | Used per-project. Gated on the project shipping a `.plot/` directory and the dispatch request carrying a `plot_id`. Warren imports `@os-eco/plot-cli` as a typed facade (`src/plot-client/`), injects `PLOT_ID` + `PLOT_ACTOR` env into the sandbox at spawn, appends `run_dispatched` to the originating Plot, and mirrors agent-emitted events back into warren's event stream at reap (§11.O). |
 | **sapling** | One of three built-in harnesses (alongside `claude-code` and `pi`). Shipped as a pre-installed CLI in the container; selected per agent via `burrow_config`. |
 | **pi** (`@earendil-works/pi-coding-agent`) | Third built-in harness, multi-provider with first-class per-run cost reporting. Shipped as a pre-installed CLI in the container; runtime contract lives in burrow's `AgentRegistry` (see §11.K). |
 | **overstory** | Sibling, not subordinate. Multi-agent orchestration is overstory's domain; warren is single-agent-per-run. Overstory could be invoked as a "harness" in a future agent definition. |

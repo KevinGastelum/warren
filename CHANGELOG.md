@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`feat(plot)`** — Plot integration (phase 1 of `warren-000b`,
+  plan `pl-2047`). Plot joins canopy/mulch/seeds/sapling as the fifth
+  opt-in bundled feature: a project shipping a `.plot/` directory plus
+  a `plot_id` on `POST /runs` lights up the substrate, projects without
+  `.plot/` are byte-identical to the pre-change behavior. Spawn-time
+  injects `PLOT_ID` + `PLOT_ACTOR=agent:<name>:<run-id>` into the
+  sandbox env so the `plot` CLI inside resolves the right Plot;
+  warren appends a `run_dispatched` event (actor `user:<handle>`) to
+  the originating Plot on dispatch; reap merges the workspace `.plot/`
+  back into the project's persistent `.plot/` (content-addressed,
+  conflict-on-content) and mirrors agent-emitted `decision_made` /
+  `question_posed` / `artifact_produced` events into warren's event
+  stream tagged with `plot_id`. The `src/plot-client/` facade narrows
+  the agent-actor write surface so warren cannot construct the four
+  humans-only event types (`intent_edited`, `status_changed`,
+  `attachment_removed`, `question_answered`) — same defense-in-depth
+  pattern as `src/burrow-client/`. `@os-eco/plot-cli` is double-pinned
+  in `package.json` + `bun.lock` AND the `Dockerfile` global install
+  per the burrow-cli rule. Acceptance scenario 25
+  (`scripts/acceptance/scenarios/25-plot-roundtrip.ts`) covers the
+  round-trip end-to-end against a live warren+burrow stack. See
+  SPEC §11.O. (`warren-000b`, `pl-2047`)
+
 ### Changed
 
 - **`feat(preview/launch)`** — `DEFAULT_READINESS_TIMEOUT_MS` bumped from 5m

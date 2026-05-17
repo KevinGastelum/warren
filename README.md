@@ -13,7 +13,7 @@ Spawn cloud agents at your GitHub repos. Watch them work live, steer them mid-ru
 
 Warren is a self-hostable control plane for ephemeral coding agents. Runs are short-lived and sandboxed: they complete a task, validate the changes, push a branch, and spin down. Point it at your repos, dispatch from a browser or CLI, watch the events stream live, and reap the result. **One container, one volume, one HTTP API, one UI.**
 
-A fresh install needs nothing but a GitHub URL and a prompt. The built-in `claude-code` agent ships inline; pick it, paste your repo, write what you want done. Power features (versioned prompt libraries, persistent agent memory, an integrated issue queue, a steerable alternative harness) light up when you opt into them.
+A fresh install needs nothing but a GitHub URL and a prompt. The built-in `claude-code` agent ships inline; pick it, paste your repo, write what you want done. Power features (versioned prompt libraries, persistent agent memory, an integrated issue queue, a steerable alternative harness, a shared coordination substrate) light up when you opt into them.
 
 ## Who this is for
 
@@ -21,7 +21,7 @@ Engineering teams self-hosting their own agent infrastructure. The deployment un
 
 ## Status
 
-Stable (`0.3.12`), running on Fly.io in continuous use against real GitHub repos. The end-to-end path is covered by 23 scenario-based acceptance tests in [`scripts/acceptance/`](scripts/acceptance/): manual runs, cron triggers, multi-worker placement, Postgres backend, per-run preview environments, restart recovery, cost tracking, seeds-extensions roundtrip. The active frontier is the org-readiness cluster: SSO, remote workers, MCP, audit, budgets, GitHub App auth. See [ROADMAP.md](ROADMAP.md).
+Stable (`0.3.12`), running on Fly.io in continuous use against real GitHub repos. The end-to-end path is covered by 25 scenario-based acceptance tests in [`scripts/acceptance/`](scripts/acceptance/): manual runs, cron triggers, multi-worker placement, Postgres backend, per-run preview environments, restart recovery, cost tracking, seeds-extensions roundtrip. The active frontier is the org-readiness cluster: SSO, remote workers, MCP, audit, budgets, GitHub App auth. See [ROADMAP.md](ROADMAP.md).
 
 ## What you get
 
@@ -128,6 +128,10 @@ If a project has a `.seeds/` directory, agents can `sd ready` for unblocked work
 ### Steerable harness: sapling as an alternative to claude-code
 
 The built-in `sapling` agent is a headless coding harness with proactive context management. Use it the same way you'd use `claude-code`. See [sapling](https://github.com/jayminwest/sapling).
+
+### Shared coordination: plot as a peer-network substrate
+
+If a project has a `.plot/` directory, runs dispatched with a `plot_id` get `PLOT_ID` + `PLOT_ACTOR=agent:<name>:<run-id>` injected into the sandbox. The agent inside reads context with `plot get` and appends `decision_made` / `question_posed` / `artifact_produced` events with `plot append`. Warren appends a `run_dispatched` event to the originating Plot on spawn and merges the workspace `.plot/` back at reap, mirroring agent events into the run's event stream tagged with `plot_id`. Projects without `.plot/` are byte-identical to the pre-change behavior. See [plot](https://github.com/jayminwest/plot) and [SPEC §11.O](SPEC.md#11o-plot-integration-pl-2047-2026-05-17).
 
 ### PR-body template: per-project overrides for the PR warren opens
 
@@ -281,7 +285,7 @@ bun run ui:install
 bun run ui:dev
 ```
 
-The acceptance harness in [`scripts/acceptance/`](scripts/acceptance/) drives 23 scenarios against a live container. See [ACCEPTANCE.md](ACCEPTANCE.md) for the runbook.
+The acceptance harness in [`scripts/acceptance/`](scripts/acceptance/) drives 25 scenarios against a live container. See [ACCEPTANCE.md](ACCEPTANCE.md) for the runbook.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for branch naming, testing conventions, and PR expectations.
 
