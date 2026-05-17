@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.16] — 2026-05-17
+
+Plot integration ships as the fifth opt-in bundled feature, plus a preview
+readiness-timeout bump sized for modern SPA cold-compile budgets.
+
 ### Added
 
 - **`feat(plot)`** — Plot integration (phase 1 of `warren-000b`,
