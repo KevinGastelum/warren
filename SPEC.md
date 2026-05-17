@@ -96,7 +96,7 @@ Warren is a thin coordinator — most of the value is in the runtime plus whiche
 - **Burrow HTTP API** (burrow's `pl-5b40` / `burrow-1d64`) — warren never imports burrow as a library. HTTP only, so warren and burrow can be independent processes inside one container.
 - **Canopy as agent source** — agents are not warren records, they are canopy prompts. Warren is a read-mostly consumer of canopy.
 - **CLI shell-out for mulch/seeds/canopy** — these tools are git-native, file-locked, atomic. Warren does not embed their state; it shells out.
-- **HTTP API for warren itself** — the UI is one consumer; greenhouse, ad-hoc scripts, and future orchestrators are others.
+- **HTTP API for warren itself** — the UI is one consumer; ad-hoc scripts and future orchestrators are others.
 
 ---
 
@@ -1699,7 +1699,6 @@ implementation work isn't blocked on re-deriving the design.
 | **sapling** | One of three built-in harnesses (alongside `claude-code` and `pi`). Shipped as a pre-installed CLI in the container; selected per agent via `burrow_config`. |
 | **pi** (`@earendil-works/pi-coding-agent`) | Third built-in harness, multi-provider with first-class per-run cost reporting. Shipped as a pre-installed CLI in the container; runtime contract lives in burrow's `AgentRegistry` (see §11.K). |
 | **overstory** | Sibling, not subordinate. Multi-agent orchestration is overstory's domain; warren is single-agent-per-run. Overstory could be invoked as a "harness" in a future agent definition. |
-| **greenhouse** | Sibling. Greenhouse polls GitHub → creates seeds → could call warren's HTTP API to dispatch a run. The autonomous outer loop. |
 | **mycelium / grove** | Out of scope for this document. |
 
 ---
