@@ -134,22 +134,29 @@ export type LaunchFailureReason =
 	| "setup_timeout";
 
 /**
- * Default readiness probe wall clock. Sized to cover a cold `pnpm install` +
- * dev-server bind for projects with hundreds of deps (warren-0928); the probe
- * returns on first 2xx, so a larger ceiling only delays failure reporting and
- * doesn't slow the happy path. Override per-project via
+ * Default readiness probe wall clock. Sized for the *bundler*, not for install
+ * + bind: warren-d9e7 split install into its own setup sidecar, and the
+ * remaining inhabitant of this budget is dev-server bind plus first-route
+ * compile. Modern SPAs (Next.js, Vite, SvelteKit, Astro) routinely take
+ * 3-7 minutes for a cold first-compile of a moderately large app — run
+ * `run_428nktsej0yh` on jayminwest.com (Next.js 14, 1875 modules) finished
+ * its first compile at ~10 min wall clock once the install was factored out
+ * (warren-fdf2). 10m gives an honest budget; the probe returns on first 2xx
+ * so the happy path is unaffected. Override per-project via
  * `.warren/preview.yaml`'s `readiness_timeout`.
+ *
+ * Note that the deadline starts when the dev-server sidecar is *created*,
+ * not when the first probe connects, so burrow startup + shell pre-exec
+ * eat into this budget too. Tightening that semantic is a follow-up
+ * (warren-fdf2 approach B); the default bump is approach A.
  */
-export const DEFAULT_READINESS_TIMEOUT_MS = 300_000;
+export const DEFAULT_READINESS_TIMEOUT_MS = 600_000;
 /** Default pause between probe attempts. */
 export const DEFAULT_READINESS_POLL_MS = 500;
 /**
  * Default cap on the setup pre-step (warren-d9e7). Sized to cover a cold
  * pnpm/npm install for projects with hundreds of deps; tunable per-project
- * via `.warren/preview.yaml`'s `setup_timeout`. The current
- * `DEFAULT_READINESS_TIMEOUT_MS` was inflated to absorb install + bind
- * under one ceiling; splitting setup into its own pre-step lets the
- * readiness probe drop back to a tight value in a follow-up.
+ * via `.warren/preview.yaml`'s `setup_timeout`.
  */
 export const DEFAULT_SETUP_TIMEOUT_MS = 300_000;
 /**

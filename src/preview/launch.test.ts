@@ -335,17 +335,19 @@ describe("launchPreview", () => {
 		expect(row.previewFailureMessage).toContain("TypeError");
 	});
 
-	// warren-0928: cold pnpm/npm installs commonly exceed 60s; the new default
-	// covers the install + bind window so happy-path startup doesn't fail on
-	// first-time runs.
-	test("DEFAULT_READINESS_TIMEOUT_MS is 5 minutes", () => {
-		expect(DEFAULT_READINESS_TIMEOUT_MS).toBe(300_000);
+	// warren-fdf2: bumped from 5m to 10m after run_428nktsej0yh confirmed
+	// modern SPA first-compile (Next.js 14, ~1875 modules) routinely
+	// approaches 7-8 minutes wall clock — the 5m default was sized when
+	// install + bind shared the budget, but warren-d9e7 split install into
+	// its own setup sidecar so this constant now sizes bundler cold-start.
+	test("DEFAULT_READINESS_TIMEOUT_MS is 10 minutes", () => {
+		expect(DEFAULT_READINESS_TIMEOUT_MS).toBe(600_000);
 	});
 
 	test("respects injected readinessTimeoutMs over the default deadline", async () => {
 		// Hold the clock fixed and feed enough 502s to exhaust the override
 		// (10ms / 100ms poll = 1 attempt, no further attempts before deadline).
-		// The 5m default would mean ~3000 attempts — any non-default ceiling
+		// The 10m default would mean ~6000 attempts — any non-default ceiling
 		// pulled from the input must actually shorten the loop.
 		const sidecars = fakeSidecars({ stdout: "", stderr: "compile error\n" });
 		const t0 = new Date("2026-05-14T18:00:00.000Z").getTime();

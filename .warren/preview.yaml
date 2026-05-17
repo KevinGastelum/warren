@@ -53,11 +53,15 @@
 #                           # the sandbox is unprivileged-by-namespace.
 # readiness_path: /healthz  # optional; must start with '/'. Launcher probes
 #                           # this to decide the server is up.
-# readiness_timeout: 5m     # optional — cap on how long the launcher waits for
-#                           # the first 2xx from readiness_path. Default 5m,
-#                           # bound 1s..1h. Cold pnpm/npm installs commonly
-#                           # need >60s; the probe returns on first 2xx so a
-#                           # larger ceiling only delays failure reporting.
+# readiness_timeout: 10m    # optional — cap on how long the launcher waits for
+#                           # the first 2xx from readiness_path. Default 10m,
+#                           # bound 1s..1h. Sized for cold *bundler* first-
+#                           # compile (Next.js / Vite / SvelteKit on a
+#                           # moderately large app commonly takes 5-8 min);
+#                           # install lives under `setup_timeout` instead.
+#                           # The probe returns on first 2xx so a larger
+#                           # ceiling only delays failure reporting. Deadline
+#                           # starts at sidecar create, not first probe-connect.
 # idle_ttl: 30m             # optional — kill after this much idle time.
 #                           # Format: one or more <number><unit> pairs,
 #                           # units ms|s|m|h|d (e.g. "30m", "1h30m").

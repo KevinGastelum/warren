@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`feat(preview/launch)`** — `DEFAULT_READINESS_TIMEOUT_MS` bumped from 5m
+  to 10m. Sized for the bundler now that `warren-d9e7` moved install into
+  its own setup sidecar with a separate `setup_timeout` — what's left under
+  this budget is dev-server bind plus first-route compile, which routinely
+  takes 5-8 minutes for modern SPAs (Next.js, Vite, SvelteKit, Astro) on
+  apps with hundreds of modules. `run_428nktsej0yh` (jayminwest.com,
+  Next.js 14, ~1875 modules) finished its cold first-compile at ~10 min
+  once install was factored out — the 5m default would have failed it.
+  The probe still returns on first 2xx so the happy path is unaffected;
+  per-project override via `.warren/preview.yaml`'s `readiness_timeout`
+  unchanged. Deadline still starts at sidecar-create (not first
+  probe-connect); tightening that semantic is a follow-up under
+  `warren-fdf2` approach B. (`warren-fdf2`)
+
 ## [0.3.15] — 2026-05-17
 
 Preview hardening pass — five coupled fixes that turn path-mode preview
