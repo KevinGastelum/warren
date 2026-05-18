@@ -868,7 +868,7 @@ describe("GET /runs/:id/events — NDJSON tail", () => {
 		if (!run) throw new Error("run missing");
 		// Backfill plot_id directly — the run was created before the project
 		// flipped hasPlot. Spawn-side validation is covered by spawn.test.ts.
-		db.raw.exec(`UPDATE runs SET plot_id = 'pl-2047' WHERE id = '${run.id}'`);
+		db.raw.exec(`UPDATE runs SET plot_id = 'plot-2047abc1' WHERE id = '${run.id}'`);
 
 		const burrowClient = new BurrowClient({
 			config: { transport: { kind: "unix", path: "/tmp/x.sock" } },
@@ -890,7 +890,7 @@ describe("GET /runs/:id/events — NDJSON tail", () => {
 			.filter((l) => l !== "");
 		for (const line of lines) {
 			const env = JSON.parse(line) as { plotId: string | null };
-			expect(env.plotId).toBe("pl-2047");
+			expect(env.plotId).toBe("plot-2047abc1");
 		}
 	});
 

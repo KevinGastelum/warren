@@ -75,7 +75,7 @@ describe("AgentPlotClient", () => {
 			},
 		});
 		try {
-			const handle = client.get("pl-deadbeef");
+			const handle = client.get("plot-deadbeef");
 			expect(handle).toBeInstanceOf(AgentPlotHandle);
 		} finally {
 			client.close();
@@ -103,7 +103,7 @@ describe("AgentPlotClient", () => {
 			},
 		});
 		try {
-			const handle = client.get("pl-deadbeef");
+			const handle = client.get("plot-deadbeef");
 			const call = () =>
 				handle.append({ type: eventType, data: {} } as unknown as {
 					type: "note";
@@ -150,7 +150,7 @@ describe("AgentPlotClient", () => {
 			},
 		});
 		try {
-			const handle = client.get("pl-deadbeef");
+			const handle = client.get("plot-deadbeef");
 			// @ts-expect-error — editIntent does not exist on AgentPlotHandle
 			void ((h: typeof handle) => h.editIntent({ goal: "x" }));
 			// @ts-expect-error — setStatus does not exist on AgentPlotHandle
@@ -174,7 +174,7 @@ describe("UserPlotClient", () => {
 			actor: { kind: "user", handle: "alice", raw: "user:alice" },
 		});
 		try {
-			const handle = client.get("pl-deadbeef");
+			const handle = client.get("plot-deadbeef");
 			expect(handle).toBeInstanceOf(UserPlotHandle);
 		} finally {
 			client.close();

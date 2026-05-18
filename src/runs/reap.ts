@@ -256,7 +256,7 @@ export interface ReapRunResult {
 	readonly mulchAppended: number;
 	readonly seedsClosed: number;
 	/**
-	 * Plot event log lines appended to the project's `.plot/pl-*.events.jsonl`
+	 * Plot event log lines appended to the project's `.plot/plot-*.events.jsonl`
 	 * files after merging the burrow workspace's deltas (warren-7e0f /
 	 * pl-2047 step 6). Idempotent re-runs report 0 — the merge dedups by
 	 * full-line content so a second sweep over the same workspace adds
@@ -264,7 +264,7 @@ export interface ReapRunResult {
 	 */
 	readonly plotEventsAppended: number;
 	/**
-	 * Distinct `pl-*.json` files overwritten in the project's `.plot/` from
+	 * Distinct `plot-*.json` files overwritten in the project's `.plot/` from
 	 * a newer workspace copy (warren-7e0f). Last-write-wins on `updated_at`
 	 * mirrors the mulch-merge primitive; ties with different contents emit
 	 * a `plot.conflict` event but leave the project copy untouched.
@@ -1236,12 +1236,12 @@ interface ParsedPlotEvent {
  * Replay the burrow workspace's `.plot/` deltas back into the project's
  * persistent `.plot/`. Two file kinds get merged:
  *
- *   1. `pl-*.events.jsonl` — append-only event log. Deduped by full-line
+ *   1. `plot-*.events.jsonl` — append-only event log. Deduped by full-line
  *      content; new lines from the workspace get appended in workspace
  *      order. Idempotent: a re-run against an already-merged workspace
  *      appends nothing.
  *
- *   2. `pl-*.json` — Plot state document. Last-write-wins on
+ *   2. `plot-*.json` — Plot state document. Last-write-wins on
  *      `updated_at` (same primitive as mulch's `recorded_at` LWW per
  *      mx-spec §11.A). Equal `updated_at` with different contents emits
  *      a `plot.conflict` event and leaves the project copy untouched —
@@ -1273,9 +1273,9 @@ async function mergePlot(
 	// across would create stale rows.
 	const plotIds = new Set<string>();
 	for (const name of filenames) {
-		if (name.startsWith("pl-") && name.endsWith(".events.jsonl")) {
+		if (name.startsWith("plot-") && name.endsWith(".events.jsonl")) {
 			plotIds.add(name.slice(0, -".events.jsonl".length));
-		} else if (name.startsWith("pl-") && name.endsWith(".json")) {
+		} else if (name.startsWith("plot-") && name.endsWith(".json")) {
 			plotIds.add(name.slice(0, -".json".length));
 		}
 	}
@@ -1403,7 +1403,7 @@ interface PlotJsonMergeResult {
 }
 
 /**
- * Pure: merge a single Plot's pl-id.json. LWW on `updated_at`. Equal
+ * Pure: merge a single Plot's plot-id.json. LWW on `updated_at`. Equal
  * `updated_at` with content drift is a real conflict (two writers
  * touched the same revision) — surface it as `plot.conflict` and keep
  * the existing project copy so an operator can triage.

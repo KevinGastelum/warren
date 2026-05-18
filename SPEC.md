@@ -1735,20 +1735,20 @@ spawnRun
    │    (sandbox-side `plot get` / `plot append` resolve the right Plot)
    │
    ├─►  emitRunDispatchedToPlot      (fire-and-log; failure ≠ spawn failure)
-   │    └─►  appends `run_dispatched` to .plot/pl-<id>.events.jsonl
+   │    └─►  appends `run_dispatched` to .plot/plot-<id>.events.jsonl
    │         actor=user:<handle>, payload={run_id, agent, model, project}
    │
    ▼
-[ agent runs; `plot append` writes to workspace .plot/pl-*.events.jsonl ]
+[ agent runs; `plot append` writes to workspace .plot/plot-*.events.jsonl ]
    │
    ▼  reap (src/runs/reap.ts)
 mergePlotsFromBurrow
    │
-   ├─►  merge workspace .plot/pl-*.json into project .plot/ (content-addr;
+   ├─►  merge workspace .plot/plot-*.json into project .plot/ (content-addr;
    │    conflict-on-content emits a `plot.conflict` warren event and
    │    leaves the project copy untouched)
    │
-   ├─►  append-only union of .plot/pl-*.events.jsonl deltas (dedupe by
+   ├─►  append-only union of .plot/plot-*.events.jsonl deltas (dedupe by
    │    event id; replay-safe and idempotent)
    │
    └─►  mirror agent-emitted decision_made / question_posed /
@@ -1831,7 +1831,7 @@ covers the round-trip end-to-end against a real warren+burrow stack:
 2. Dispatch a run with `plot_id`. Assert `PLOT_ID` + `PLOT_ACTOR` reach
    the sandbox env via an in-sandbox `printenv` snapshot.
 3. Agent runs `plot append` from inside the sandbox; assert the event
-   lands in `.plot/pl-*.events.jsonl` after reap.
+   lands in `.plot/plot-*.events.jsonl` after reap.
 4. Assert `run_dispatched` is present in the Plot's event log.
 5. Assert warren's event stream contains the mirrored agent events
    tagged with `plot_id`.

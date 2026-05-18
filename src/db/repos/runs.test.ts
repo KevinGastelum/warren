@@ -110,10 +110,10 @@ function suite(dialect: "sqlite" | "postgres"): void {
 		test("create persists plotId when provided", async () => {
 			const { handle, repo, agentName, projectId } = await open();
 			try {
-				const row = await spawn(repo, agentName, projectId, { plotId: "pl-2047" });
-				expect(row.plotId).toBe("pl-2047");
+				const row = await spawn(repo, agentName, projectId, { plotId: "plot-2047abc1" });
+				expect(row.plotId).toBe("plot-2047abc1");
 				const reread = await repo.require(row.id);
-				expect(reread.plotId).toBe("pl-2047");
+				expect(reread.plotId).toBe("plot-2047abc1");
 			} finally {
 				await handle.close();
 			}

@@ -266,7 +266,7 @@ describe("spawnRun", () => {
 				agentName: "refactor-bot",
 				projectId: "prj_xxxxxxxxxxxx",
 				prompt: "fix it",
-				plotId: "pl-2047",
+				plotId: "plot-2047abc1",
 			}),
 		).rejects.toBeInstanceOf(ValidationError);
 		expect(calls).toHaveLength(0);
@@ -287,11 +287,11 @@ describe("spawnRun", () => {
 			agentName: "refactor-bot",
 			projectId: "prj_xxxxxxxxxxxx",
 			prompt: "fix it",
-			plotId: "pl-2047",
+			plotId: "plot-2047abc1",
 		});
-		expect(result.run.plotId).toBe("pl-2047");
+		expect(result.run.plotId).toBe("plot-2047abc1");
 		const reread = await repos.runs.require(result.run.id);
-		expect(reread.plotId).toBe("pl-2047");
+		expect(reread.plotId).toBe("plot-2047abc1");
 	});
 
 	test("injects PLOT_ID + PLOT_ACTOR onto the burrow up call when plotId is set (warren-e26f)", async () => {
@@ -304,14 +304,14 @@ describe("spawnRun", () => {
 			agentName: "refactor-bot",
 			projectId: "prj_xxxxxxxxxxxx",
 			prompt: "fix it",
-			plotId: "pl-2047",
+			plotId: "plot-2047abc1",
 		});
 
 		const up = calls.find((c) => c.method === "POST" && c.path === "/burrows");
 		expect(up).toBeDefined();
 		const env = (up?.body as { env?: Record<string, string> }).env;
 		expect(env).toEqual({
-			PLOT_ID: "pl-2047",
+			PLOT_ID: "plot-2047abc1",
 			PLOT_ACTOR: `agent:refactor-bot:${result.run.id}`,
 		});
 	});
@@ -345,7 +345,7 @@ describe("spawnRun", () => {
 			agentName: "refactor-bot",
 			projectId: "prj_xxxxxxxxxxxx",
 			prompt: "fix it",
-			plotId: "pl-2047",
+			plotId: "plot-2047abc1",
 			dispatcherHandle: "alice",
 			plotAppender: makeAppender({ calls: appendCalls }),
 		});
@@ -354,7 +354,7 @@ describe("spawnRun", () => {
 		const call = appendCalls[0];
 		if (!call) throw new Error("appender not called");
 		expect(call.plotDir).toBe("/data/projects/x/y/.plot");
-		expect(call.plotId).toBe("pl-2047");
+		expect(call.plotId).toBe("plot-2047abc1");
 		expect(call.handle).toBe("alice");
 		expect(call.runId).toBe(result.run.id);
 		expect(call.agentName).toBe("refactor-bot");
@@ -387,7 +387,7 @@ describe("spawnRun", () => {
 			agentName: "refactor-bot",
 			projectId: "prj_xxxxxxxxxxxx",
 			prompt: "fix it",
-			plotId: "pl-2047",
+			plotId: "plot-2047abc1",
 			dispatcherHandle: "@bad/handle",
 			plotAppender: makeAppender({ calls: appendCalls }),
 		});
@@ -404,7 +404,7 @@ describe("spawnRun", () => {
 			agentName: "refactor-bot",
 			projectId: "prj_xxxxxxxxxxxx",
 			prompt: "fix it",
-			plotId: "pl-2047",
+			plotId: "plot-2047abc1",
 			plotAppender: makeAppender({ calls: appendCalls }),
 		});
 		expect(appendCalls[0]?.handle).toBe(DEFAULT_DISPATCHER_HANDLE);
@@ -419,7 +419,7 @@ describe("spawnRun", () => {
 			agentName: "refactor-bot",
 			projectId: "prj_xxxxxxxxxxxx",
 			prompt: "fix it",
-			plotId: "pl-2047",
+			plotId: "plot-2047abc1",
 			plotAppender: makeAppender({ throws: new Error("rebuild failed too") }),
 		});
 		// Spawn returned a non-cancelled run row, proving the failure didn't
@@ -430,7 +430,7 @@ describe("spawnRun", () => {
 		expect(failure).toBeDefined();
 		expect(failure?.stream).toBe("system");
 		const payload = failure?.payloadJson as { plotId?: string; reason?: string };
-		expect(payload?.plotId).toBe("pl-2047");
+		expect(payload?.plotId).toBe("plot-2047abc1");
 		expect(payload?.reason).toContain("rebuild failed too");
 	});
 
@@ -444,7 +444,7 @@ describe("spawnRun", () => {
 			agentName: "refactor-bot",
 			projectId: "prj_xxxxxxxxxxxx",
 			prompt: "fix it",
-			plotId: "pl-2047",
+			plotId: "plot-2047abc1",
 			plotAppender: makeAppender({ calls: appendCalls }),
 		});
 		expect(appendCalls[0]?.model).toBeNull();

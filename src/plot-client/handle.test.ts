@@ -21,7 +21,7 @@ function recorderHandle(): { inner: PlotHandle; calls: RecorderCall[] } {
 			return Promise.resolve({ type: method, args } as unknown);
 		};
 	const inner = {
-		id: "pl-test0001",
+		id: "plot-test0001",
 		read: trap("read"),
 		events: trap("events"),
 		view: trap("view"),
@@ -114,7 +114,7 @@ describe("AgentPlotHandle write-ACL narrowing", () => {
 		await handle.view("implementer");
 		await handle.attach({ type: "file", ref: "README.md", role: "reference" });
 		expect(calls.map((c) => c.method)).toEqual(["read", "events", "view", "attach"]);
-		expect(handle.id).toBe("pl-test0001");
+		expect(handle.id).toBe("plot-test0001");
 	});
 
 	test("HUMANS_ONLY_EVENT_TYPES matches SPEC §6 exactly", () => {

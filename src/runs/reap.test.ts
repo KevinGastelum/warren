@@ -1566,8 +1566,8 @@ describe("reapRun", () => {
 			'{"type":"plot_created","actor":"user:op","at":"2026-05-17T10:00:00.000Z","data":{"name":"x"}}\n' +
 			'{"type":"run_dispatched","actor":"user:op","at":"2026-05-17T10:00:01.000Z","data":{"run_id":"r1"}}\n';
 		const f = fakeFs({
-			"/data/burrow/ws/.plot/pl-abc12345.events.jsonl": burrowEvents,
-			"/data/projects/x/y/.plot/pl-abc12345.events.jsonl": projectEvents,
+			"/data/burrow/ws/.plot/plot-abc12345.events.jsonl": burrowEvents,
+			"/data/projects/x/y/.plot/plot-abc12345.events.jsonl": projectEvents,
 		});
 
 		const result = await reapRun({
@@ -1583,7 +1583,7 @@ describe("reapRun", () => {
 		expect(result.plotEventsAppended).toBe(4);
 		expect(result.plotEventsMirrored).toBe(3);
 		expect(result.errors).toEqual([]);
-		const merged = f.files.get("/data/projects/x/y/.plot/pl-abc12345.events.jsonl") ?? "";
+		const merged = f.files.get("/data/projects/x/y/.plot/plot-abc12345.events.jsonl") ?? "";
 		// All four new events from the workspace land in the project file.
 		expect(merged).toContain('"summary":"use Bun"');
 		expect(merged).toContain('"text":"which db?"');
@@ -1598,7 +1598,7 @@ describe("reapRun", () => {
 		expect(kinds).toEqual(["plot.artifact_produced", "plot.decision_made", "plot.question_posed"]);
 		const decision = mirrored.find((ev) => ev.kind === "plot.decision_made");
 		expect(decision?.payloadJson).toMatchObject({
-			plotId: "pl-abc12345",
+			plotId: "plot-abc12345",
 			actor: "agent:refactor-bot:r1",
 			at: "2026-05-17T10:05:00.000Z",
 		});
@@ -1611,7 +1611,7 @@ describe("reapRun", () => {
 		const burrowEvents =
 			'{"type":"decision_made","actor":"agent:refactor-bot:r1","at":"2026-05-17T10:05:00.000Z","data":{"summary":"use Bun"}}\n';
 		const f = fakeFs({
-			"/data/burrow/ws/.plot/pl-abc12345.events.jsonl": burrowEvents,
+			"/data/burrow/ws/.plot/plot-abc12345.events.jsonl": burrowEvents,
 		});
 
 		const first = await reapRun({
@@ -1654,7 +1654,7 @@ describe("reapRun", () => {
 	test("plot_merge writes through pl-id.json by last-write-wins on updated_at", async () => {
 		const projectJson = JSON.stringify({
 			schema_version: 1,
-			id: "pl-abc12345",
+			id: "plot-abc12345",
 			name: "x",
 			status: "active",
 			created_at: "2026-05-17T10:00:00.000Z",
@@ -1664,7 +1664,7 @@ describe("reapRun", () => {
 		});
 		const workspaceJson = JSON.stringify({
 			schema_version: 1,
-			id: "pl-abc12345",
+			id: "plot-abc12345",
 			name: "x",
 			status: "active",
 			created_at: "2026-05-17T10:00:00.000Z",
@@ -1673,8 +1673,8 @@ describe("reapRun", () => {
 			attachments: [{ id: "att-001", type: "file", ref: "x.ts", role: "tracks" }],
 		});
 		const f = fakeFs({
-			"/data/burrow/ws/.plot/pl-abc12345.json": workspaceJson,
-			"/data/projects/x/y/.plot/pl-abc12345.json": projectJson,
+			"/data/burrow/ws/.plot/plot-abc12345.json": workspaceJson,
+			"/data/projects/x/y/.plot/plot-abc12345.json": projectJson,
 		});
 
 		const result = await reapRun({
@@ -1687,21 +1687,21 @@ describe("reapRun", () => {
 		});
 
 		expect(result.plotsUpdated).toBe(1);
-		const merged = f.files.get("/data/projects/x/y/.plot/pl-abc12345.json") ?? "";
+		const merged = f.files.get("/data/projects/x/y/.plot/plot-abc12345.json") ?? "";
 		expect(merged).toContain('"att-001"');
 		const events = await ctx.repos.events.listByRun(ctx.runId);
 		expect(events.find((ev) => ev.kind === "plot.updated")?.payloadJson).toMatchObject({
-			plotId: "pl-abc12345",
+			plotId: "plot-abc12345",
 		});
 	});
 
 	test("plot_merge emits plot.conflict when updated_at matches but contents differ", async () => {
 		const ts = "2026-05-17T10:00:00.000Z";
-		const projectJson = JSON.stringify({ id: "pl-abc12345", updated_at: ts, name: "a" });
-		const workspaceJson = JSON.stringify({ id: "pl-abc12345", updated_at: ts, name: "b" });
+		const projectJson = JSON.stringify({ id: "plot-abc12345", updated_at: ts, name: "a" });
+		const workspaceJson = JSON.stringify({ id: "plot-abc12345", updated_at: ts, name: "b" });
 		const f = fakeFs({
-			"/data/burrow/ws/.plot/pl-abc12345.json": workspaceJson,
-			"/data/projects/x/y/.plot/pl-abc12345.json": projectJson,
+			"/data/burrow/ws/.plot/plot-abc12345.json": workspaceJson,
+			"/data/projects/x/y/.plot/plot-abc12345.json": projectJson,
 		});
 
 		const result = await reapRun({
@@ -1715,10 +1715,10 @@ describe("reapRun", () => {
 
 		expect(result.plotsUpdated).toBe(0);
 		// Project copy stays put on a content conflict.
-		expect(f.files.get("/data/projects/x/y/.plot/pl-abc12345.json")).toBe(projectJson);
+		expect(f.files.get("/data/projects/x/y/.plot/plot-abc12345.json")).toBe(projectJson);
 		const events = await ctx.repos.events.listByRun(ctx.runId);
 		const conflict = events.find((ev) => ev.kind === "plot.conflict");
-		expect(conflict?.payloadJson).toMatchObject({ plotId: "pl-abc12345" });
+		expect(conflict?.payloadJson).toMatchObject({ plotId: "plot-abc12345" });
 	});
 
 	test("plot_merge is a no-op when the workspace has no .plot/ directory", async () => {
@@ -1744,7 +1744,7 @@ describe("reapRun", () => {
 		const burrowEvents =
 			'{"type":"decision_made","actor":"user:operator","at":"2026-05-17T10:05:00.000Z","data":{"summary":"use Bun"}}\n';
 		const f = fakeFs({
-			"/data/burrow/ws/.plot/pl-abc12345.events.jsonl": burrowEvents,
+			"/data/burrow/ws/.plot/plot-abc12345.events.jsonl": burrowEvents,
 		});
 
 		const result = await reapRun({

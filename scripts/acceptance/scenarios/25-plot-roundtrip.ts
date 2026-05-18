@@ -16,7 +16,7 @@
  *
  *   2. Dispatch a run against that project with `plot_id` set on the body.
  *      Wait for `running`, poll until the project's
- *      `.plot/pl-<id>.events.jsonl` carries the host-side
+ *      `.plot/plot-<id>.events.jsonl` carries the host-side
  *      `run_dispatched` append (warren-e848 path: warren's spawn flow opens
  *      a `UserPlotClient` and writes before any sandbox bytes flow).
  *
@@ -30,12 +30,12 @@
  *
  *   4. Assertions on `/runs/:id/events` and on disk:
  *        - host-side `run_dispatched` line is present in the project's
- *          `.plot/pl-<id>.events.jsonl` post-spawn (step 2).
+ *          `.plot/plot-<id>.events.jsonl` post-spawn (step 2).
  *        - Conditional on `body.env` reaching the sandbox (warren-a346):
  *          a `text` event containing `PLOT_ID=<id>` proves warren-e26f's
  *          env reached the sandbox process group; `plot.decision_made`
  *          appears with matching `plotId` (mirrored by warren-7e0f);
- *          and the project's `.plot/pl-<id>.events.jsonl` carries the
+ *          and the project's `.plot/plot-<id>.events.jsonl` carries the
  *          agent's `decision_made` line after reap. These three assertions
  *          are soft-skipped today because burrow-cli@0.3.1's
  *          `POST /burrows` handler doesn't parse `body.env` into
@@ -216,7 +216,7 @@ export const scenario: Scenario = {
 			);
 
 			// Post-reap disk verification — the project's persistent
-			// .plot/pl-<id>.events.jsonl now carries the agent's decision_made
+			// .plot/plot-<id>.events.jsonl now carries the agent's decision_made
 			// line in addition to the host-side run_dispatched.
 			const projectPlotEventsAfter = await readFile(projectPlotEventsPath, "utf8");
 			assertTrue(
@@ -317,7 +317,7 @@ async function buildPlotFixture(input: BuildPlotFixtureInput): Promise<string> {
 	await runIn(input.fixturePath, ["git", "init", "--initial-branch=main"], env);
 	await runIn(input.fixturePath, ["chmod", "+x", "tools/stub-agent.sh"], env);
 
-	// `plot init <name>` creates `.plot/pl-<id>.json` + events file +
+	// `plot init <name>` creates `.plot/plot-<id>.json` + events file +
 	// .index.db. Run with a user actor so the seed `plot_created` event
 	// is authored by user:* (Plot SPEC §6 — agent actors are forbidden
 	// from `plot_created` for new plots).
