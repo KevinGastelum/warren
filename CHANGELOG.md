@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.6] — 2026-05-18
+
+Patch release bundling the post-`0.4.5` stream of dogfood-driven fixes
+and Plot-UX features: `.plot/` now round-trips through reap to origin
+(warren-343a) closing the shape (a) loop opened by `0.4.2`; PlotDetail
+gains a one-click "Run agent" affordance off `seeds_issue` attachments
+(warren-ff2a); the runs subsystem grows two terminal-recovery paths
+(raw-text agent terminal-detect via burrow state poll, and read-time
+cost/token hydration from events) plus the long-standing ghost-run
+reconciliation in the bridge; project-tier canopy roles get
+cross-tier inheritance and an on-disk rendered cache; preview launch
+gets a distinct `connect_timeout` phase; and the burrow data dir is
+pinned onto the persistent volume so in-flight runs survive redeploy.
+
 ### Added
 
 - **`feat(reap)`** — Commit `.plot/` through reap so Plot state
@@ -34,6 +48,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   preservation for in-flight writes between dispatch and the next
   reap.
 
+- **`feat(ui)`** — "Run agent" button on every `seeds_issue` attachment
+  row in `PlotDetail`'s `SubstratePanel` (warren-ff2a). Clicking
+  navigates to `/runs/new` with project, agent, `plot_id`, and prompt
+  pre-filled so the user can dispatch immediately — agent comes from
+  the project's `defaultRole`, prompt from `defaultPrompt` (with
+  `{seed_id}` substituted) or `"work on sd {seed_id}"` as fallback.
+  `NewRunPage` now reads `NewRunRouteState` off react-router
+  `location.state` on mount; pre-filled non-empty `agent`/`prompt`
+  mark `*Touched=true` so the existing project-default auto-fill
+  effects don't clobber them. First child of the Plot-UX vision
+  (`warren-e40a`) that surfaces Plot→plan→seed→run end-to-end.
+
 - **`feat(registry)`** — Cross-tier inheritance for per-project canopy
   roles (warren-44a3, follow-up to R-03 / pl-fef5). A project-tier role
   can now declare `extends:` (or `mixins:`) pointing at a library or
@@ -46,6 +72,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to the built-in instead of recursing on itself. Source stamping still
   tracks the leaf tier (`project:<id>`); parent provenance survives in
   `resolvedFrom`.
+
+- **`feat(registry)`** — On-disk rendered cache for project-tier agents
+  (warren-44e3, R-03 / pl-fef5 follow-up). `refreshProjectAgents` now
+  mirrors each registered project agent's rendered JSON to
+  `<projectPath>/.canopy/.rendered/<name>.json` alongside the
+  agents-table upsert. A self-ignoring `.gitignore` is seeded once so
+  the cache stays out of project commits. Removed rows get their cache
+  file pruned. Non-warren consumers (`cn render`, agents reading the
+  project directly) can now see what a project-tier role resolves to
+  without going through warren.
 
 - **`feat(preview)`** — Two-phase readiness probe with a distinct
   `connect_timeout` (warren-9b15 / warren-fdf2 approach B). `preview`
@@ -66,6 +102,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to match the bundler's actual cold-compile cost. Closes `warren-9b15`.
 
 ### Fixed
+
+- **`fix(runs)`** — Bridge run-state poller catches terminal for
+  raw-text agents (warren-6596). Burrow's run-stream is an infinite
+  tail that never closes when a run reaches terminal, and
+  `detectRuntimeTerminal` only fires for `claude-code` (result) and
+  `pi` (agent_end) envelopes. Declarative agents with
+  `outputFormat=raw-text` (acceptance stub-shell, user-authored shell
+  agents) emit only text events, so warren had no way to learn the run
+  had finished — runs stayed `running` forever, blocking inline reap
+  and acceptance scenarios 20/20-path/24 on Linux. `bridgeRunStream`
+  now runs a 2s-cadence `burrow.runs.get` poller alongside the event
+  stream. On observing a terminal burrow state it waits a 1s drain
+  window (one `tailBurrow` cycle) for final events, then aborts the
+  stream and synthesises `terminalDetected` from the burrow state (1:1
+  outcome map). In-stream terminal-detect still wins when both fire —
+  it carries exit_code semantics from the runtime parser. The poller
+  is dormant in tests that pass `source` without a `runStateProbe`, so
+  existing tests don't need updates.
+
+- **`fix(runs)`** — Compute cost/tokens from events for terminal runs
+  with null totals (warren-ab18). When a run terminates abnormally
+  (machine reboot, ghost run, reap that never finalises), the bridge's
+  in-stream `attachStats` checkpoint never lands and the
+  cost/token columns stay null even though the underlying usage
+  envelopes are durably persisted to `events`. The UI then renders the
+  run's cost as `"-"` despite the data being there. `hydrateRunsUsage`
+  (`src/runs/usage-hydrate.ts`) is the read-time fallback: for
+  terminal runs with null `costUsd`, it reads the run's
+  `state_change` / `system` events via the new
+  `EventsRepo.listUsageEvents`, sums them with the same
+  shape-sniffing the bridge uses, and overlays the derived totals onto
+  the row. The list-endpoint case batches all candidates into a single
+  events query so this is one extra round-trip per `GET /runs`, not
+  N+1. The shape-sniffing functions (`accumulatePiUsage`,
+  `extractClaudeUsage`, `SessionStatsAccumulator`) move from
+  `src/runs/stream.ts` into the new `src/runs/usage-aggregate.ts` so
+  write-time (bridge) and read-time (hydrator) share one canonical
+  implementation and can't drift.
+
+- **`fix(ui)`** — Inline "Refresh project" action on the `NewPlanRun`
+  missing-`.seeds` destructive card (warren-c666). The card told
+  users to "refresh the project" but offered no in-page action. Most
+  cases are a stale `has_seeds` flag (project registered before
+  warren-9990 detection landed), so the card now renders a Refresh
+  project button that calls `projectsApi.refresh` and invalidates the
+  projects query — same pattern as `Projects.tsx`.
 
 - **`fix(bridge)`** — Detect & reconcile "ghost" runs (warren state
   `running`, burrow has no record). When warren's machine restarts and
