@@ -30,6 +30,7 @@ import { Client, type DispatchSpawnFn, loadAgentConfig } from "@os-eco/burrow-cl
 import { runServeCommand } from "@os-eco/burrow-cli/src/cli/commands/serve.ts";
 import { parseJsonlClaude } from "@os-eco/burrow-cli/src/runtime/parsers/jsonl-claude.ts";
 import { parsePiEvents } from "@os-eco/burrow-cli/src/runtime/parsers/pi.ts";
+import { piEnvPassthrough } from "@os-eco/burrow-cli/src/runtime/pi.ts";
 import type { AgentRuntime } from "@os-eco/burrow-cli/src/runtime/runtime.ts";
 
 interface ParsedArgs {
@@ -171,8 +172,13 @@ const PI_AGENT_CONFIG = {
  */
 function buildPiAcceptanceRuntime(): AgentRuntime {
 	const base = loadAgentConfig(PI_AGENT_CONFIG);
+	// Use burrow's real piEnvPassthrough so the dispatcher applies the
+	// frontmatter-conditional provider key delta (burrow-6f3f / warren-fe96).
+	// Scenario 25 dispatches with frontmatter.provider='openai' and asserts
+	// OPENAI_API_KEY lands in the spawned stub's env.
 	return {
 		...base,
+		envPassthrough: piEnvPassthrough,
 		parseEvents: (line: string) => parsePiEvents(line),
 	};
 }

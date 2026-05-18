@@ -41,6 +41,22 @@ emit() {
 
 emit '{"type":"response","command":"prompt","success":true}'
 emit '{"type":"agent_start"}'
+
+# env_keys_visible — bespoke envelope for scenario 25 (burrow-6f3f /
+# warren-fe96) reporting which multi-provider keys the dispatcher's
+# envPassthrough actually surfaced into this sandbox. Always emitted so
+# scenario 16 sees the same stream shape; downstream parsers collapse
+# unknown `type` values to a generic state_change envelope so the line
+# is harmless to scenarios that don't assert on it. List order is fixed
+# for deterministic substring matching in the scenario.
+keys_visible=""
+for k in ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY GOOGLE_API_KEY GROQ_API_KEY MISTRAL_API_KEY DEEPSEEK_API_KEY; do
+  if [ -n "${!k:-}" ]; then
+    if [ -z "$keys_visible" ]; then keys_visible="\"${k}\""; else keys_visible="${keys_visible},\"${k}\""; fi
+  fi
+done
+emit "{\"type\":\"env_keys_visible\",\"keys\":[${keys_visible}]}"
+
 emit '{"type":"turn_start"}'
 
 # user message echo — prompt content is included only for shape
