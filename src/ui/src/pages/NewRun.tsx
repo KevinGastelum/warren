@@ -40,6 +40,7 @@ export function NewRunPage() {
 	});
 	const [prompt, setPrompt] = useState("");
 	const [promptTouched, setPromptTouched] = useState(false);
+	const [plotId, setPlotId] = useState("");
 	const [ref, setRef] = useState("");
 	const [providerOverride, setProviderOverride] = useState("");
 	const [providerTouched, setProviderTouched] = useState(false);
@@ -133,6 +134,7 @@ export function NewRunPage() {
 		const trimmedRef = ref.trim();
 		const trimmedProvider = providerOverride.trim();
 		const trimmedModel = modelOverride.trim();
+		const trimmedPlotId = plotId.trim();
 		spawn.mutate({
 			agent,
 			project,
@@ -140,12 +142,14 @@ export function NewRunPage() {
 			...(trimmedRef.length > 0 ? { ref: trimmedRef } : {}),
 			...(trimmedProvider.length > 0 ? { providerOverride: trimmedProvider } : {}),
 			...(trimmedModel.length > 0 ? { modelOverride: trimmedModel } : {}),
+			...(hasPlot && trimmedPlotId.length > 0 ? { plotId: trimmedPlotId } : {}),
 		});
 	};
 
 	const noAgents = !agents.isLoading && (agents.data?.agents.length ?? 0) === 0;
 	const noProjects = !projects.isLoading && (projects.data?.projects.length ?? 0) === 0;
 	const selectedProject = projects.data?.projects.find((p) => p.id === project);
+	const hasPlot = selectedProject?.hasPlot ?? false;
 
 	return (
 		<div className="mx-auto max-w-3xl space-y-6">
@@ -253,6 +257,26 @@ export function NewRunPage() {
 								remote-branch lookup yet.
 							</p>
 						</div>
+
+						{hasPlot ? (
+							<div className="space-y-1.5">
+								<Label htmlFor="plotId">Plot ID (optional)</Label>
+								<Input
+									id="plotId"
+									value={plotId}
+									onChange={(e) => setPlotId(e.target.value)}
+									placeholder="plot-…"
+									autoComplete="off"
+									spellCheck={false}
+								/>
+								<p className="text-xs text-(--color-muted-foreground)">
+									Bind this run to a Plot. The Plot's activity feed gets a{" "}
+									<code className="font-mono">run_dispatched</code> event; the
+									sandbox sees <code className="font-mono">PLOT_ID</code> /{" "}
+									<code className="font-mono">PLOT_ACTOR</code>.
+								</p>
+							</div>
+						) : null}
 
 						<div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
 							<div className="space-y-1.5">
