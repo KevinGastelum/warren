@@ -355,3 +355,95 @@ function isFalsy(raw: string): boolean {
 	const v = raw.trim().toLowerCase();
 	return v === "0" || v === "false" || v === "no" || v === "off" || v === "";
 }
+
+/* ----------------------------------------------------------------------- */
+/* PR-merge polling                                                         */
+/* ----------------------------------------------------------------------- */
+
+/**
+ * `checkPullRequestMerged` — poll a GitHub PR's merge state for the PlanRun
+ * coordinator (warren-9e4c). Pure helper: the caller decides what each
+ * non-merged shape means (`open` = wait, `closed_unmerged` = fail the plan).
+ *
+ * Mirrors `openPullRequest`'s posture: direct REST call against
+ * `GET /repos/:owner/:repo/pulls/:number`, `Authorization: Bearer <token>`
+ * from `GITHUB_TOKEN`, fetch injected as a seam.
+ */
+export interface CheckPullRequestMergedInput {
+	readonly owner: string;
+	readonly repo: string;
+	readonly number: number;
+	readonly token: string;
+	readonly fetch?: typeof fetch;
+}
+
+export type CheckPrMergedResult =
+	| { readonly kind: "merged"; readonly mergedAt: string }
+	| { readonly kind: "open" }
+	| { readonly kind: "closed_unmerged" }
+	| { readonly kind: "missing_token"; readonly message: string }
+	| { readonly kind: "http_error"; readonly status: number; readonly message: string };
+
+export async function checkPullRequestMerged(
+	input: CheckPullRequestMergedInput,
+): Promise<CheckPrMergedResult> {
+	if (input.token === "") {
+		return {
+			kind: "missing_token",
+			message: "GITHUB_TOKEN unset; cannot check pull request merge state",
+		};
+	}
+
+	const fetchImpl = input.fetch ?? globalThis.fetch;
+	const url = `${GITHUB_API_BASE}/repos/${input.owner}/${input.repo}/pulls/${input.number}`;
+
+	let res: Response;
+	try {
+		res = await fetchImpl(url, { method: "GET", headers: buildHeaders(input.token) });
+	} catch (err) {
+		return {
+			kind: "http_error",
+			status: 0,
+			message: err instanceof Error ? err.message : String(err),
+		};
+	}
+
+	if (res.status !== 200) {
+		const text = await readText(res);
+		return {
+			kind: "http_error",
+			status: res.status,
+			message: `GET /pulls/${input.number} returned ${res.status}: ${truncate(text, 500)}`,
+		};
+	}
+
+	const body = (await readJson(res)) as { merged_at?: unknown; state?: unknown } | null;
+	const mergedAt = typeof body?.merged_at === "string" ? body.merged_at : null;
+	if (mergedAt !== null) {
+		return { kind: "merged", mergedAt };
+	}
+	const state = typeof body?.state === "string" ? body.state : "";
+	if (state === "closed") {
+		return { kind: "closed_unmerged" };
+	}
+	return { kind: "open" };
+}
+
+/**
+ * `parsePullRequestUrl` — regex-parse `https://github.com/<owner>/<repo>/pull/<n>`.
+ * Returns `null` on mismatch (e.g. GHE-hosted shapes) so the coordinator
+ * treats them as "cannot verify merge" rather than "merged".
+ */
+const PR_URL_RE = /^https:\/\/github\.com\/([^/\s]+)\/([^/\s]+)\/pull\/(\d+)(?:[/?#].*)?$/;
+
+export function parsePullRequestUrl(
+	prUrl: string,
+): { owner: string; repo: string; number: number } | null {
+	const m = PR_URL_RE.exec(prUrl.trim());
+	if (m === null) return null;
+	const [, owner, repo, num] = m;
+	if (owner === undefined || repo === undefined || num === undefined) return null;
+	const n = Number.parseInt(num, 10);
+	if (!Number.isFinite(n) || n <= 0) return null;
+	return { owner, repo, number: n };
+}
