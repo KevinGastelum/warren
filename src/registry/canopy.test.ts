@@ -153,6 +153,99 @@ describe("CanopyClient.renderAgent", () => {
 	});
 });
 
+describe("CanopyClient.showAgent (warren-44a3)", () => {
+	test("invokes `cn show <name> --json` and returns the raw, un-resolved prompt", async () => {
+		const showEnv = {
+			success: true,
+			command: "show",
+			prompt: {
+				id: "canopy-abc",
+				name: "refactor-bot",
+				version: 3,
+				sections: [
+					{ name: "system", body: "sys-body" },
+					{ name: "skills", body: "skills-body" },
+				],
+				extends: "library-base",
+				mixins: ["common-skills"],
+				frontmatter: { provider: "anthropic" },
+				status: "active",
+			},
+		};
+		const { spawn, calls } = makeSpawn(() => ok(JSON.stringify(showEnv)));
+		const client = CanopyClient.forProjectPath({ projectPath: "/proj", spawn });
+		const out = await client.showAgent("refactor-bot");
+		expect(out).toEqual({
+			name: "refactor-bot",
+			version: 3,
+			sections: [
+				{ name: "system", body: "sys-body" },
+				{ name: "skills", body: "skills-body" },
+			],
+			extends: "library-base",
+			mixins: ["common-skills"],
+			frontmatter: { provider: "anthropic" },
+		});
+		expect(calls[0]?.cmd).toEqual(["cn", "show", "refactor-bot", "--json"]);
+	});
+
+	test("returns null on the structured `Prompt 'X' not found` error envelope", async () => {
+		const errEnv = { success: false, command: "show", error: "Prompt 'missing' not found" };
+		const { spawn } = makeSpawn(() => fail("", 1, JSON.stringify(errEnv)));
+		const client = CanopyClient.forProjectPath({ projectPath: "/proj", spawn });
+		const out = await client.showAgent("missing");
+		expect(out).toBeNull();
+	});
+
+	test('also accepts the double-quoted variant `Prompt "X" not found`', async () => {
+		const errEnv = { success: false, command: "show", error: 'Prompt "missing" not found' };
+		const { spawn } = makeSpawn(() => fail("", 1, JSON.stringify(errEnv)));
+		const client = CanopyClient.forProjectPath({ projectPath: "/proj", spawn });
+		const out = await client.showAgent("missing");
+		expect(out).toBeNull();
+	});
+
+	test("throws CanopyUnavailableError on a non-not-found structured error", async () => {
+		const errEnv = {
+			success: false,
+			command: "show",
+			error: "Canopy store is corrupt",
+		};
+		const { spawn } = makeSpawn(() => fail("", 1, JSON.stringify(errEnv)));
+		const client = CanopyClient.forProjectPath({ projectPath: "/proj", spawn });
+		await expect(client.showAgent("foo")).rejects.toMatchObject({
+			code: "canopy_unavailable",
+			message: expect.stringContaining("Canopy store is corrupt"),
+		});
+	});
+
+	test("throws on transport-layer non-zero exit without a structured envelope", async () => {
+		const { spawn } = makeSpawn(() => fail("cn segfault", 139));
+		const client = CanopyClient.forProjectPath({ projectPath: "/proj", spawn });
+		await expect(client.showAgent("foo")).rejects.toBeInstanceOf(CanopyUnavailableError);
+	});
+
+	test("defaults `mixins` to [] and `frontmatter` to {} when canopy omits them", async () => {
+		const showEnv = {
+			success: true,
+			command: "show",
+			prompt: {
+				id: "canopy-abc",
+				name: "minimal",
+				version: 1,
+				sections: [{ name: "system", body: "x" }],
+				status: "active",
+			},
+		};
+		const { spawn } = makeSpawn(() => ok(JSON.stringify(showEnv)));
+		const client = CanopyClient.forProjectPath({ projectPath: "/proj", spawn });
+		const out = await client.showAgent("minimal");
+		expect(out?.extends).toBeUndefined();
+		expect(out?.mixins).toEqual([]);
+		expect(out?.frontmatter).toEqual({});
+	});
+});
+
 describe("CanopyClient.forLibrary", () => {
 	test("invokes `cn` from the library's localDir", async () => {
 		const { spawn, calls } = makeSpawn(() =>

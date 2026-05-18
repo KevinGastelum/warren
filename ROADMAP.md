@@ -262,10 +262,14 @@ Spawn-time freezing (today's behavior) is unchanged: the rendered JSON is
 copied into `runs.renderedAgentJson` and never re-rendered mid-run.
 
 **Follow-ups (filed as seeds; not in V1).**
-- Cross-tier inheritance: whether a per-project role can `extend:` a
-  library or built-in role. Canopy supports inheritance within a single
-  tier; the resolver needs to look up the parent across tiers. V1 ships
-  single-tier inheritance only.
+- Cross-tier inheritance — **shipped 2026-05-18 via warren-44a3.** A
+  project-tier role can now `extend:` (or `mixins:`) a library or built-in
+  role: when `cn render` bails because the parent lives outside the
+  project's `.canopy/`, `refreshProjectAgents` falls back to a warren-side
+  composer (`src/registry/compose.ts`) that walks parents through the
+  resolver project → global. Same-named name shadows are walked past so a
+  project role named `claude-code` extending `claude-code` resolves to the
+  built-in, not itself.
 - On-disk rendered cache under `<projectPath>/.canopy/.rendered/` so
   consumers without warren can read project-tier roles directly. Matches
   `cn emit`'s contract.

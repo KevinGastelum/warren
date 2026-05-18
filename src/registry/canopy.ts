@@ -72,6 +72,42 @@ const ErrorResponseSchema = z.object({
 	error: z.string(),
 });
 
+const RawSectionSchema = z.object({
+	name: z.string().min(1),
+	body: z.string(),
+});
+
+const ShowPromptSchema = z.object({
+	name: z.string().min(1),
+	version: z.number().int().positive(),
+	sections: z.array(RawSectionSchema).default([]),
+	extends: z.string().min(1).optional(),
+	mixins: z.array(z.string().min(1)).optional(),
+	frontmatter: z.record(z.string(), z.unknown()).optional(),
+	status: z.enum(["draft", "active", "archived"]).optional(),
+});
+
+const ShowResponseSchema = z.object({
+	success: z.literal(true),
+	command: z.literal("show"),
+	prompt: ShowPromptSchema.passthrough(),
+});
+
+/**
+ * Raw, *un-resolved* prompt as returned by `cn show <name> --json` —
+ * sections and frontmatter are the prompt's own (no inheritance applied),
+ * and `extends` / `mixins` carry the parent references warren composes
+ * across tiers in `compose.ts` (warren-44a3 follow-up to R-03 / pl-fef5).
+ */
+export interface RawAgentPrompt {
+	readonly name: string;
+	readonly version: number;
+	readonly sections: ReadonlyArray<{ readonly name: string; readonly body: string }>;
+	readonly extends: string | undefined;
+	readonly mixins: ReadonlyArray<string>;
+	readonly frontmatter: Readonly<Record<string, unknown>>;
+}
+
 export interface CanopyClientOptions {
 	readonly cnBinary: string;
 	readonly cwd: string;
@@ -147,6 +183,59 @@ export class CanopyClient {
 		return parsed.prompts.filter((p) => p.status === undefined || p.status === "active");
 	}
 
+	/**
+	 * Fetch a prompt's *un-resolved* record by name. Unlike `renderAgent`,
+	 * this returns the prompt's own sections + extends/mixins references
+	 * without canopy applying inheritance — the warren-side composer
+	 * (`compose.ts`) uses it to walk parent chains across tiers
+	 * (warren-44a3 follow-up to R-03 / pl-fef5).
+	 *
+	 * Returns `null` when canopy reports the prompt isn't present at this
+	 * client's cwd (structured `{success:false, error:"Prompt 'X' not found"}`
+	 * envelope). All other failure modes — transport error, unparseable
+	 * envelope, non-zero exit without a structured "not found" — throw
+	 * `CanopyUnavailableError` so the compose resolver can distinguish
+	 * "look in another tier" from "abort the refresh".
+	 */
+	async showAgent(name: string): Promise<RawAgentPrompt | null> {
+		const result = await this.invoke(["show", name, "--json"]);
+		const peek = tryParseJson(result.stdout);
+		if (peek !== undefined) {
+			const errResp = ErrorResponseSchema.safeParse(peek);
+			if (errResp.success) {
+				if (isPromptNotFoundMessage(errResp.data.error)) return null;
+				throw new CanopyUnavailableError(`cn show ${name} failed: ${errResp.data.error}`, {
+					recoveryHint: "verify the canopy store is readable at the client's cwd",
+				});
+			}
+		}
+		if (result.exitCode !== 0) {
+			throw new CanopyUnavailableError(
+				`cn show ${name} exited ${result.exitCode}: ${formatStderr(result)}`,
+			);
+		}
+		if (peek === undefined) {
+			throw new CanopyUnavailableError(`cn show ${name} did not produce parseable JSON`, {
+				recoveryHint: "ensure the canopy CLI is at version 0.2 or newer (--json envelope)",
+			});
+		}
+		const parsed = ShowResponseSchema.safeParse(peek);
+		if (!parsed.success) {
+			throw new CanopyUnavailableError(
+				`cn show ${name} returned an unrecognized envelope: ${parsed.error.issues.map((i) => i.message).join("; ")}`,
+			);
+		}
+		const prompt = parsed.data.prompt;
+		return {
+			name: prompt.name,
+			version: prompt.version,
+			sections: prompt.sections,
+			extends: prompt.extends,
+			mixins: prompt.mixins ?? [],
+			frontmatter: prompt.frontmatter ?? {},
+		};
+	}
+
 	/** Render a single prompt by name, returning the raw JSON envelope. */
 	async renderAgent(name: string): Promise<unknown> {
 		// Use the global `--json` flag, not `cn render --format json`. The
@@ -215,6 +304,17 @@ function parseEnvelope<T>(result: SpawnResult, schema: z.ZodType<T>, context: st
 		);
 	}
 	return validated.data;
+}
+
+/**
+ * Match canopy's two equivalent "prompt missing" error strings:
+ *   - `Prompt 'X' not found`             (cn show)
+ *   - `Prompt "X" not found`             (cn render — quoted differently)
+ * Used by `showAgent` to collapse the structured-not-found case into a
+ * null return so the compose resolver can fall through to other tiers.
+ */
+function isPromptNotFoundMessage(message: string): boolean {
+	return /^Prompt ['"][^'"]+['"] not found$/.test(message.trim());
 }
 
 function tryParseJson(text: string): unknown {

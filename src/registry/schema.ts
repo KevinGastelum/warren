@@ -125,21 +125,31 @@ export function parseRenderedAgent(raw: unknown, agentName?: string): AgentDefin
 		}
 		sections[section.name] = section.body;
 	}
-	for (const required of REQUIRED_AGENT_SECTIONS) {
-		if (!Object.hasOwn(sections, required)) {
-			throw new AgentSchemaError(`agent "${env.name}" is missing required section "${required}"`, {
-				recoveryHint: `add a "${required}" section to the canopy prompt and re-render`,
-			});
-		}
-	}
-
-	return {
+	const def: AgentDefinition = {
 		name: env.name,
 		version: env.version,
 		sections,
 		resolvedFrom: env.resolvedFrom ?? [],
 		frontmatter: env.frontmatter ?? {},
 	};
+	validateAgentDefinition(def);
+	return def;
+}
+
+/**
+ * Enforce warren's required-sections rule on an already-built
+ * `AgentDefinition`. Reused by `parseRenderedAgent` (post-canopy-render)
+ * and by the cross-tier composer (warren-44a3) so a composed agent that
+ * still ends up missing `system` is skipped with the same error shape.
+ */
+export function validateAgentDefinition(def: AgentDefinition): void {
+	for (const required of REQUIRED_AGENT_SECTIONS) {
+		if (!Object.hasOwn(def.sections, required)) {
+			throw new AgentSchemaError(`agent "${def.name}" is missing required section "${required}"`, {
+				recoveryHint: `add a "${required}" section to the canopy prompt and re-render`,
+			});
+		}
+	}
 }
 
 function formatZodIssue(issue: z.core.$ZodIssue): string {

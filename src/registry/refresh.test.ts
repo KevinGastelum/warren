@@ -26,6 +26,7 @@ const CFG: CanopyRegistryConfig = {
 function buildSpawn(
 	listResp: unknown,
 	renderResponses: Record<string, { ok?: unknown; exit?: number; stderr?: string }>,
+	showResponses: Record<string, { ok?: unknown; exit?: number; stderr?: string }> = {},
 ): SpawnFn {
 	return async (cmd) => {
 		if (cmd[1] === "list") {
@@ -46,8 +47,72 @@ function buildSpawn(
 			}
 			return { stdout: JSON.stringify(handler.ok), stderr: "", exitCode: 0 };
 		}
+		if (cmd[1] === "show") {
+			const name = cmd[2] as string;
+			const handler = showResponses[name];
+			if (!handler) {
+				// Default: structured "Prompt not found" envelope so the compose
+				// resolver treats unknown names as absent at this tier.
+				return {
+					stdout: JSON.stringify({
+						success: false,
+						command: "show",
+						error: `Prompt '${name}' not found`,
+					}),
+					stderr: "",
+					exitCode: 1,
+				};
+			}
+			if (handler.exit !== undefined && handler.exit !== 0) {
+				return {
+					stdout: handler.ok !== undefined ? JSON.stringify(handler.ok) : "",
+					stderr: handler.stderr ?? "",
+					exitCode: handler.exit,
+				};
+			}
+			return { stdout: JSON.stringify(handler.ok), stderr: "", exitCode: 0 };
+		}
 		const result: SpawnResult = { stdout: "", stderr: "unexpected cmd", exitCode: 1 };
 		return result;
+	};
+}
+
+/** Helper: build a structured `cn show --json` success envelope. */
+function showOk(
+	name: string,
+	body: {
+		version?: number;
+		sections?: Record<string, string>;
+		extends?: string;
+		mixins?: string[];
+		frontmatter?: Record<string, unknown>;
+	},
+) {
+	return {
+		ok: {
+			success: true,
+			command: "show",
+			prompt: {
+				id: `canopy-${name}`,
+				name,
+				version: body.version ?? 1,
+				sections: Object.entries(body.sections ?? {}).map(([n, b]) => ({ name: n, body: b })),
+				...(body.extends !== undefined ? { extends: body.extends } : {}),
+				...(body.mixins !== undefined ? { mixins: body.mixins } : {}),
+				...(body.frontmatter !== undefined ? { frontmatter: body.frontmatter } : {}),
+				status: "active",
+				createdAt: "2026-01-01T00:00:00.000Z",
+				updatedAt: "2026-01-01T00:00:00.000Z",
+			},
+		},
+	};
+}
+
+/** Helper: structured "Prompt 'X' not found" render error envelope. */
+function renderMissingParent(parentName: string) {
+	return {
+		exit: 1,
+		ok: { success: false, command: "render", error: `Prompt "${parentName}" not found` },
 	};
 }
 
@@ -493,6 +558,275 @@ describe("refreshProjectAgents", () => {
 		const client = CanopyClient.forProjectPath({ projectPath: "/proj", spawn });
 		await expect(refreshProjectAgents({ client, agents, projectId })).rejects.toMatchObject({
 			code: "canopy_unavailable",
+		});
+	});
+
+	describe("cross-tier inheritance (warren-44a3)", () => {
+		test("composes a project-tier role that extends a built-in agent", async () => {
+			const projectId = await seedProject();
+			// Pre-seed the global tier with a "claude-code" built-in.
+			await agents.upsert({
+				name: "claude-code",
+				renderedJson: {
+					name: "claude-code",
+					version: 1,
+					sections: { system: "builtin-system", workflow: "builtin-workflow" },
+					resolvedFrom: ["claude-code"],
+					frontmatter: { source: "builtin", provider: "anthropic" },
+				},
+			});
+			const spawn = buildSpawn(
+				{
+					success: true,
+					command: "list",
+					prompts: [{ name: "refactor-bot", version: 1, status: "active" }],
+				},
+				{
+					// cn render fails because canopy can't find the cross-tier parent.
+					"refactor-bot": renderMissingParent("claude-code"),
+				},
+				{
+					// cn show returns the raw project prompt with extends: claude-code.
+					"refactor-bot": showOk("refactor-bot", {
+						sections: { system: "refactor-system", expertise_seed: "refactor-seed" },
+						extends: "claude-code",
+						frontmatter: { model: "claude-sonnet-4-6" },
+					}),
+				},
+			);
+			const client = CanopyClient.forProjectPath({ projectPath: "/proj", spawn });
+
+			const result = await refreshProjectAgents({ client, agents, projectId });
+
+			expect(result.skipped).toEqual([]);
+			expect(result.registered.map((r) => r.name)).toEqual(["refactor-bot"]);
+			const row = await agents.require("refactor-bot", { projectId });
+			const def = row.renderedJson as {
+				sections: Record<string, string>;
+				frontmatter: { source: string; provider?: string; model?: string };
+				resolvedFrom: string[];
+			};
+			// Built-in system overridden, built-in workflow preserved, project's expertise_seed added.
+			expect(def.sections).toEqual({
+				system: "refactor-system",
+				workflow: "builtin-workflow",
+				expertise_seed: "refactor-seed",
+			});
+			// Source stamp reflects the LEAF tier, not the built-in parent.
+			expect(def.frontmatter.source).toBe(`project:${projectId}`);
+			// Parent frontmatter merged in; focal frontmatter still applied; source overlay last.
+			expect(def.frontmatter.provider).toBe("anthropic");
+			expect(def.frontmatter.model).toBe("claude-sonnet-4-6");
+			expect(def.resolvedFrom).toEqual(["claude-code", "refactor-bot"]);
+		});
+
+		test("composes a project-tier role whose chain walks through a library parent", async () => {
+			const projectId = await seedProject();
+			// Library-tier parent (no source stamp; readAgentSource collapses to library).
+			await agents.upsert({
+				name: "library-base",
+				renderedJson: {
+					name: "library-base",
+					version: 2,
+					sections: { system: "lib-system", verbose: "lib-verbose" },
+					resolvedFrom: ["library-base"],
+					frontmatter: {},
+				},
+			});
+			const spawn = buildSpawn(
+				{
+					success: true,
+					command: "list",
+					prompts: [{ name: "tuned", version: 1, status: "active" }],
+				},
+				{ tuned: renderMissingParent("library-base") },
+				{
+					tuned: showOk("tuned", {
+						sections: { skills: "tuned-skills" },
+						extends: "library-base",
+					}),
+				},
+			);
+			const client = CanopyClient.forProjectPath({ projectPath: "/proj", spawn });
+
+			const result = await refreshProjectAgents({ client, agents, projectId });
+			expect(result.skipped).toEqual([]);
+			const row = await agents.require("tuned", { projectId });
+			const def = row.renderedJson as {
+				sections: Record<string, string>;
+				frontmatter: { source: string };
+			};
+			expect(def.sections).toEqual({
+				system: "lib-system",
+				verbose: "lib-verbose",
+				skills: "tuned-skills",
+			});
+			expect(def.frontmatter.source).toBe(`project:${projectId}`);
+		});
+
+		test("source stamping walks past a same-named project-tier shadow to a real built-in parent", async () => {
+			// The seed's open question: project has its own role NAMED claude-code
+			// AND another role that `extends: claude-code`. Parent resolution
+			// must NOT loop on the project shadow — it should bottom out at the
+			// global built-in. Because both project prompts live in the project's
+			// .canopy/, canopy's own resolver actually handles this case (in-tier
+			// extends). We assert the merge result is correct end-to-end.
+			const projectId = await seedProject();
+			await agents.upsert({
+				name: "claude-code",
+				renderedJson: {
+					name: "claude-code",
+					version: 1,
+					sections: { system: "builtin", workflow: "wf" },
+					resolvedFrom: ["claude-code"],
+					frontmatter: { source: "builtin" },
+				},
+			});
+			const spawn = buildSpawn(
+				{
+					success: true,
+					command: "list",
+					prompts: [
+						// The project-tier shadow of claude-code itself extends the built-in.
+						{ name: "claude-code", version: 1, status: "active" },
+						{ name: "tuned", version: 1, status: "active" },
+					],
+				},
+				{
+					// Both renders bail because the chain points outside the project.
+					"claude-code": renderMissingParent("claude-code"),
+					tuned: renderMissingParent("claude-code"),
+				},
+				{
+					"claude-code": showOk("claude-code", {
+						sections: { workflow: "project-workflow" },
+						extends: "claude-code",
+					}),
+					tuned: showOk("tuned", {
+						sections: { system: "tuned-system" },
+						extends: "claude-code",
+					}),
+				},
+			);
+			const client = CanopyClient.forProjectPath({ projectPath: "/proj", spawn });
+
+			const result = await refreshProjectAgents({ client, agents, projectId });
+			expect(result.skipped).toEqual([]);
+			const tuned = (await agents.require("tuned", { projectId })).renderedJson as {
+				sections: Record<string, string>;
+				frontmatter: { source: string };
+				resolvedFrom: string[];
+			};
+			// tuned → project-tier "claude-code" (workflow override) → built-in "claude-code"
+			// (system + workflow). tuned's own system wins.
+			expect(tuned.sections).toEqual({
+				system: "tuned-system",
+				workflow: "project-workflow",
+			});
+			expect(tuned.frontmatter.source).toBe(`project:${projectId}`);
+			// Built-in claude-code, project shadow, focal — three hops.
+			expect(tuned.resolvedFrom).toEqual(["claude-code", "claude-code", "tuned"]);
+		});
+
+		test("when compose fails because the parent doesn't exist anywhere, surface the compose error in skipped", async () => {
+			const projectId = await seedProject();
+			const spawn = buildSpawn(
+				{
+					success: true,
+					command: "list",
+					prompts: [{ name: "orphan", version: 1, status: "active" }],
+				},
+				{ orphan: renderMissingParent("missing-parent") },
+				{
+					orphan: showOk("orphan", {
+						sections: { system: "orphan-system" },
+						extends: "missing-parent",
+					}),
+				},
+			);
+			const client = CanopyClient.forProjectPath({ projectPath: "/proj", spawn });
+
+			const result = await refreshProjectAgents({ client, agents, projectId });
+			expect(result.registered).toEqual([]);
+			expect(result.skipped[0]).toMatchObject({
+				name: "orphan",
+				code: "agent_schema_error",
+				reason: expect.stringContaining("missing-parent"),
+			});
+		});
+
+		test("falls back to the original canopy skip when the focal prompt has no inheritance", async () => {
+			// A "Prompt not found" failure on a focal prompt with NO extends/mixins
+			// is a genuine missing-prompt case (e.g. archived between list and
+			// render) — compose should not mask it, and the original canopy
+			// error should be returned.
+			const projectId = await seedProject();
+			const spawn = buildSpawn(
+				{
+					success: true,
+					command: "list",
+					prompts: [{ name: "raced-bot", version: 1, status: "active" }],
+				},
+				{
+					"raced-bot": {
+						exit: 1,
+						ok: { success: false, command: "render", error: `Prompt "raced-bot" not found` },
+					},
+				},
+				{
+					"raced-bot": showOk("raced-bot", {
+						sections: { system: "x" },
+						// No extends, no mixins → compose returns null and the canopy
+						// render skip survives.
+					}),
+				},
+			);
+			const client = CanopyClient.forProjectPath({ projectPath: "/proj", spawn });
+
+			const result = await refreshProjectAgents({ client, agents, projectId });
+			expect(result.registered).toEqual([]);
+			expect(result.skipped[0]).toMatchObject({
+				name: "raced-bot",
+				code: "canopy_unavailable",
+				reason: expect.stringContaining("raced-bot"),
+			});
+		});
+
+		test("composed agent missing required system section is surfaced as agent_schema_error", async () => {
+			const projectId = await seedProject();
+			await agents.upsert({
+				name: "minimal-base",
+				renderedJson: {
+					name: "minimal-base",
+					version: 1,
+					sections: { skills: "lib-skills" }, // no system section anywhere in the chain
+					resolvedFrom: ["minimal-base"],
+					frontmatter: {},
+				},
+			});
+			const spawn = buildSpawn(
+				{
+					success: true,
+					command: "list",
+					prompts: [{ name: "incomplete", version: 1, status: "active" }],
+				},
+				{ incomplete: renderMissingParent("minimal-base") },
+				{
+					incomplete: showOk("incomplete", {
+						sections: { extras: "x" },
+						extends: "minimal-base",
+					}),
+				},
+			);
+			const client = CanopyClient.forProjectPath({ projectPath: "/proj", spawn });
+
+			const result = await refreshProjectAgents({ client, agents, projectId });
+			expect(result.registered).toEqual([]);
+			expect(result.skipped[0]).toMatchObject({
+				name: "incomplete",
+				code: "agent_schema_error",
+				reason: expect.stringContaining("system"),
+			});
 		});
 	});
 

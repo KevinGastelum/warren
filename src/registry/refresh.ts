@@ -29,8 +29,9 @@ import type { AgentRow } from "../db/schema.ts";
 import { makeProjectAgentSource, stampAgentSource } from "./builtins/index.ts";
 import type { AgentSummary, CanopyClient } from "./canopy.ts";
 import { type CloneOptions, type CloneResult, cloneOrUpdateCanopyRepo } from "./clone.ts";
+import { composeAgent, type ResolveParent, rawPromptHasParents } from "./compose.ts";
 import { AgentSchemaError, CanopyUnavailableError } from "./errors.ts";
-import { type AgentDefinition, parseRenderedAgent } from "./schema.ts";
+import { type AgentDefinition, parseRenderedAgent, validateAgentDefinition } from "./schema.ts";
 
 export interface RefreshSkipped {
 	readonly name: string;
@@ -258,8 +259,26 @@ async function registerOneProject(
 	cacheWriter: RenderedCacheWriter | null,
 ): Promise<RegisterOutcome> {
 	const rendered = await renderAndParse(opts.client, summary);
-	if (rendered.kind === "skipped") return rendered;
-	const stamped = stampAgentSource(rendered.definition, makeProjectAgentSource(opts.projectId));
+	let definition: AgentDefinition;
+	if (rendered.kind === "rendered") {
+		definition = rendered.definition;
+	} else {
+		// Render failed — attempt cross-tier composition (warren-44a3). Most
+		// canopy failures here mean a parent named under `extends:` lives in
+		// a different tier (library/built-in) and canopy bailed because the
+		// name isn't in this project's `.canopy/`. We rebuild the agent by
+		// fetching the raw prompt and walking parents through the project →
+		// global resolver. If the prompt has no `extends`/`mixins`, or the
+		// composer can't satisfy the chain either, fall back to the original
+		// canopy skip so the operator sees the most actionable error.
+		const composed = await tryCompose(opts, summary);
+		if (composed === null) return rendered;
+		if (composed.kind === "skipped") {
+			return { kind: "skipped", skipped: composed.skipped };
+		}
+		definition = composed.definition;
+	}
+	const stamped = stampAgentSource(definition, makeProjectAgentSource(opts.projectId));
 	const row = await opts.agents.upsert({
 		name: stamped.name,
 		projectId: opts.projectId,
@@ -270,6 +289,74 @@ async function registerOneProject(
 		await cacheWriter.write(opts.projectPath, stamped.name, stamped);
 	}
 	return { kind: "registered", row };
+}
+
+type ComposeOutcome =
+	| { kind: "definition"; definition: AgentDefinition }
+	| { kind: "skipped"; skipped: RefreshSkipped };
+
+/**
+ * Cross-tier compose fallback (warren-44a3). Returns `null` when there's
+ * nothing to compose (raw fetch failed, focal not on disk, or no
+ * inheritance to resolve) so the caller keeps the original canopy skip;
+ * returns a `ComposeOutcome` when compose either produced a definition
+ * or threw a per-agent error we surface as a skip.
+ */
+async function tryCompose(
+	opts: RefreshProjectOptions,
+	summary: AgentSummary,
+): Promise<ComposeOutcome | null> {
+	let raw: Awaited<ReturnType<CanopyClient["showAgent"]>>;
+	try {
+		raw = await opts.client.showAgent(summary.name);
+	} catch (err) {
+		if (err instanceof CanopyUnavailableError) return null;
+		throw err;
+	}
+	if (raw === null) return null;
+	if (!rawPromptHasParents(raw)) return null;
+
+	const resolve: ResolveParent = async (name, visited) => {
+		// Walk past name shadows (warren-44a3 open question): when the
+		// parent reference already appears in the resolution chain, treating
+		// the project-tier shadow as the parent would loop. Skip project
+		// tier in that case and resolve directly against the global tier so
+		// `project:foo → library:foo` (or `project:foo → builtin:foo`)
+		// composes cleanly. The project shadow still wins as the LEAF for
+		// `(name, projectId)` lookups — only the parent resolution walks
+		// past.
+		if (!visited.includes(name)) {
+			try {
+				const projectRaw = await opts.client.showAgent(name);
+				if (projectRaw !== null) {
+					return { kind: "project", raw: projectRaw };
+				}
+			} catch (err) {
+				if (!(err instanceof CanopyUnavailableError)) throw err;
+				// Treat any canopy-side miss as "not at this tier" and let
+				// the global agents repo settle it.
+			}
+		}
+		const globalRow = await opts.agents.get(name);
+		if (globalRow !== null) {
+			return { kind: "global", definition: globalRow.renderedJson as AgentDefinition };
+		}
+		return null;
+	};
+
+	try {
+		const composed = await composeAgent({ raw, resolve });
+		validateAgentDefinition(composed);
+		return { kind: "definition", definition: composed };
+	} catch (err) {
+		if (err instanceof AgentSchemaError || err instanceof CanopyUnavailableError) {
+			return {
+				kind: "skipped",
+				skipped: { name: summary.name, code: err.code, reason: err.message },
+			};
+		}
+		throw err;
+	}
 }
 
 type RenderedOutcome =

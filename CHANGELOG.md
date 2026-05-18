@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`feat(registry)`** — Cross-tier inheritance for per-project canopy
+  roles (warren-44a3, follow-up to R-03 / pl-fef5). A project-tier role
+  can now declare `extends:` (or `mixins:`) pointing at a library or
+  built-in role: when `cn render` bails because the parent lives outside
+  the project's `.canopy/`, `refreshProjectAgents` falls back to a
+  warren-side composer (`src/registry/compose.ts`) that walks parents
+  through the resolver `project → global` and merges sections + frontmatter
+  with canopy's own algorithm. Same-named name shadows are walked past, so
+  a project role named `claude-code` whose `extends: claude-code` resolves
+  to the built-in instead of recursing on itself. Source stamping still
+  tracks the leaf tier (`project:<id>`); parent provenance survives in
+  `resolvedFrom`.
+
 - **`feat(preview)`** — Two-phase readiness probe with a distinct
   `connect_timeout` (warren-9b15 / warren-fdf2 approach B). `preview`
   blocks now accept an optional `connect_timeout` (default 5m, bound
