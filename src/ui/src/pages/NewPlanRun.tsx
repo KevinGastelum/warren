@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { agentsApi, planRunsApi, projectsApi } from "@/api/client.ts";
@@ -96,6 +97,10 @@ export function NewPlanRunPage() {
 			navigate(`/plan-runs/${encodeURIComponent(data.planRun.id)}`);
 		},
 	});
+	const refreshProject = useMutation({
+		mutationFn: (id: string) => projectsApi.refresh(id),
+		onSuccess: () => qc.invalidateQueries({ queryKey: ["projects"] }),
+	});
 
 	const trimmedPlanId = planId.trim();
 	const trimmedPrompt = promptTemplate.trim();
@@ -148,11 +153,36 @@ export function NewPlanRunPage() {
 			) : null}
 			{project.length > 0 && !hasSeeds ? (
 				<Card>
-					<CardContent className="p-4 text-sm text-(--color-destructive)">
-						Plan runs require <code className="font-mono">.seeds/</code>. The
-						selected project has no <code className="font-mono">.seeds/</code>{" "}
-						directory at the clone root. Add one and refresh the project to
-						enable plan-run dispatch.
+					<CardContent className="space-y-3 p-4 text-sm text-(--color-destructive)">
+						<p>
+							Plan runs require <code className="font-mono">.seeds/</code>. The
+							selected project has no <code className="font-mono">.seeds/</code>{" "}
+							directory at the clone root. Add one and refresh the project to
+							enable plan-run dispatch.
+						</p>
+						<div className="flex items-center gap-3">
+							<Button
+								type="button"
+								variant="outline"
+								size="sm"
+								onClick={() => refreshProject.mutate(project)}
+								disabled={refreshProject.isPending}
+							>
+								<RefreshCw
+									className={`mr-2 h-4 w-4 ${
+										refreshProject.isPending ? "animate-spin" : ""
+									}`}
+								/>
+								Refresh project
+							</Button>
+							{refreshProject.isError ? (
+								<span className="text-xs">
+									{refreshProject.error instanceof Error
+										? refreshProject.error.message
+										: String(refreshProject.error)}
+								</span>
+							) : null}
+						</div>
 					</CardContent>
 				</Card>
 			) : null}
