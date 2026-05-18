@@ -11,6 +11,7 @@ import {
 	type PlotStatus,
 } from "@/api/types.ts";
 import { PlotStatusBadge } from "@/components/PlotStatusBadge.tsx";
+import { RefreshProjectsCTA } from "@/components/RefreshProjectsCTA.tsx";
 import type { NewRunRouteState } from "@/pages/NewRun.tsx";
 import { Button } from "@/components/ui/button.tsx";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card.tsx";
@@ -84,10 +85,24 @@ export function PlotDetailPage() {
 		return <p className="text-sm text-(--color-muted-foreground)">Loading…</p>;
 	}
 	if (query.isError || query.data === undefined) {
+		const message =
+			query.error instanceof Error ? query.error.message : "Failed to load plot.";
+		// warren-bb22: 404 here usually means the Plot was committed in a
+		// project clone but the project hasn't been refreshed since
+		// (detectProjectFeatures only flips hasPlot during refresh — see
+		// mx-62ef33). Surface a refresh-all CTA so the user can recover
+		// inline without bouncing to /projects.
 		return (
-			<p className="text-sm text-(--color-destructive)">
-				{query.error instanceof Error ? query.error.message : "Failed to load plot."}
-			</p>
+			<Card>
+				<CardContent className="space-y-3 p-4 text-sm">
+					<p className="text-(--color-destructive)">{message}</p>
+					<p className="text-(--color-muted-foreground)">
+						If you just committed this Plot in a project clone, refresh
+						projects so warren rediscovers it.
+					</p>
+					<RefreshProjectsCTA />
+				</CardContent>
+			</Card>
 		);
 	}
 

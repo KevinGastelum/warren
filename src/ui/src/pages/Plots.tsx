@@ -3,6 +3,7 @@ import { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { plotsApi, projectsApi } from "@/api/client.ts";
 import { PLOT_STATUSES, type PlotStatus, type PlotSummary } from "@/api/types.ts";
+import { RefreshProjectsCTA } from "@/components/RefreshProjectsCTA.tsx";
 import { Button } from "@/components/ui/button.tsx";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card.tsx";
 import {
@@ -173,20 +174,22 @@ function EmptyState({
 	hasPlotProjectCount: number;
 	statusFiltered: boolean;
 }) {
-	if (hasPlotProjectCount === 0) {
+	if (statusFiltered) {
 		return (
 			<p className="p-6 text-sm text-(--color-muted-foreground)">
-				No Plot-enabled projects yet — run <code className="font-mono">plot init</code>{" "}
-				in a project clone and refresh.
+				No plots match this status filter.
 			</p>
 		);
 	}
+	const headline =
+		hasPlotProjectCount === 0
+			? "No Plot-enabled projects yet — run plot init in a project clone, commit, then refresh."
+			: "No plots yet. Click New Plot to create one, or refresh if you just committed one.";
 	return (
-		<p className="p-6 text-sm text-(--color-muted-foreground)">
-			{statusFiltered
-				? "No plots match this status filter."
-				: "No plots yet. Click New Plot to create one."}
-		</p>
+		<div className="space-y-3 p-6 text-sm text-(--color-muted-foreground)">
+			<p>{headline}</p>
+			<RefreshProjectsCTA />
+		</div>
 	);
 }
 
