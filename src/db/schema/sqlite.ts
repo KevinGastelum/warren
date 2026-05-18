@@ -18,10 +18,20 @@
  */
 
 import { sql } from "drizzle-orm";
-import { index, integer, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import {
+	index,
+	integer,
+	primaryKey,
+	real,
+	sqliteTable,
+	text,
+	uniqueIndex,
+} from "drizzle-orm/sqlite-core";
 import {
 	EVENT_STREAMS,
 	INDEX_NAMES,
+	PLAN_RUN_CHILD_STATES,
+	PLAN_RUN_STATES,
 	PREVIEW_STATES,
 	RUN_FAILURE_REASONS,
 	RUN_STATES,
@@ -298,6 +308,88 @@ export const burrows = sqliteTable(
 	(t) => [index(INDEX_NAMES.burrowsWorker).on(t.workerId)],
 );
 
+/**
+ * Plan-run coordinator state (pl-a258 step 2 / warren-4d7c). One row per
+ * `POST /plan-runs` dispatch. The coordinator (warren-2623) walks
+ * `plan_run_children` in `seq` order, spawning one warren run per open
+ * child and waiting for its PR to merge before advancing. `plan_id` is
+ * the seeds plan id (pl-XXXX); plain text, no FK, because seeds live in
+ * the project workspace, not warren's database.
+ *
+ * `prompt_template` is rendered per child with `{seed_id}` substitution;
+ * `'work on sd {seed_id}'` is the default. `ref` is the branch warren
+ * dispatches each child against (null falls back to project.defaultBranch
+ * at spawn time). `dispatcher_handle` and `trigger` echo the run rows'
+ * shape so the UI can attribute plan runs the same way it does single
+ * runs.
+ *
+ * State machine + transition guards live in `repos/plan-runs.ts` (TS-only
+ * narrowing per mx-2ab984; no SQL CHECK).
+ */
+export const planRuns = sqliteTable(
+	TABLE_NAMES.planRuns,
+	{
+		id: text("id").primaryKey(),
+		planId: text("plan_id").notNull(),
+		projectId: text("project_id")
+			.notNull()
+			.references(() => projects.id, { onDelete: "cascade" }),
+		agentName: text("agent_name").notNull(),
+		promptTemplate: text("prompt_template").notNull().default("work on sd {seed_id}"),
+		ref: text("ref"),
+		providerOverride: text("provider_override"),
+		modelOverride: text("model_override"),
+		dispatcherHandle: text("dispatcher_handle").notNull().default("operator"),
+		trigger: text("trigger").notNull().default("manual"),
+		state: text("state", { enum: PLAN_RUN_STATES }).notNull(),
+		failureReason: text("failure_reason"),
+		createdAt: text("created_at").notNull(),
+		startedAt: text("started_at"),
+		endedAt: text("ended_at"),
+	},
+	(t) => [
+		index(INDEX_NAMES.planRunsProjectState).on(t.projectId, t.state),
+		index(INDEX_NAMES.planRunsState).on(t.state),
+	],
+);
+
+/**
+ * Per-child progress within a plan-run (pl-a258 step 2 / warren-4d7c).
+ * Composite PK on (plan_run_id, seq) gives the coordinator's
+ * `pickNextPending(planRunId)` an O(1) ordered lookup. `run_id` is null
+ * until the coordinator dispatches the child; `ON DELETE SET NULL` so a
+ * deleted run orphans the child row instead of breaking referential
+ * integrity (mirrors `runs.project_id`'s posture for project deletes).
+ *
+ * `state` enum is TS-only narrowing (mx-2ab984). Indexes back two query
+ * shapes: `(plan_run_id, state)` for `pickNextPending` and the detail
+ * page's child-state counts, and `run_id` for the reverse lookup the reap
+ * path uses to mark a child PR-open from a run-id event.
+ */
+export const planRunChildren = sqliteTable(
+	TABLE_NAMES.planRunChildren,
+	{
+		planRunId: text("plan_run_id")
+			.notNull()
+			.references(() => planRuns.id, { onDelete: "cascade" }),
+		seq: integer("seq").notNull(),
+		seedId: text("seed_id").notNull(),
+		runId: text("run_id").references(() => runs.id, { onDelete: "set null" }),
+		state: text("state", { enum: PLAN_RUN_CHILD_STATES }).notNull(),
+		createdAt: text("created_at").notNull(),
+		updatedAt: text("updated_at").notNull(),
+		startedAt: text("started_at"),
+		endedAt: text("ended_at"),
+		prMergedAt: text("pr_merged_at"),
+		failureReason: text("failure_reason"),
+	},
+	(t) => [
+		primaryKey({ columns: [t.planRunId, t.seq] }),
+		index(INDEX_NAMES.planRunChildrenRun).on(t.runId),
+		index(INDEX_NAMES.planRunChildrenState).on(t.planRunId, t.state),
+	],
+);
+
 export type AgentRow = typeof agents.$inferSelect;
 export type AgentInsert = typeof agents.$inferInsert;
 export type ProjectRow = typeof projects.$inferSelect;
@@ -312,3 +404,7 @@ export type WorkerRow = typeof workers.$inferSelect;
 export type WorkerInsert = typeof workers.$inferInsert;
 export type BurrowRow = typeof burrows.$inferSelect;
 export type BurrowInsert = typeof burrows.$inferInsert;
+export type PlanRunRow = typeof planRuns.$inferSelect;
+export type PlanRunInsert = typeof planRuns.$inferInsert;
+export type PlanRunChildRow = typeof planRunChildren.$inferSelect;
+export type PlanRunChildInsert = typeof planRunChildren.$inferInsert;

@@ -93,6 +93,70 @@ export const WORKER_STATES = ["healthy", "draining", "unreachable"] as const;
 export type WorkerState = (typeof WORKER_STATES)[number];
 
 /**
+ * Plan-run lifecycle (pl-a258 step 2 / warren-4d7c). One row per dispatched
+ * `sd plan` walk; the coordinator (warren-2623) advances the row through
+ * these states as it executes each child seed sequentially:
+ *
+ *   - `queued`     — row inserted by POST /plan-runs; first tick will flip
+ *                    to `running` and dispatch the lowest-seq child.
+ *   - `running`    — at least one child has been dispatched. The row stays
+ *                    here until every child is `merged` / `skipped`, OR a
+ *                    child terminal-fails / its PR closes without merge.
+ *   - `succeeded`  — every child reached `merged` or `skipped`.
+ *   - `failed`     — a child terminal-failed or its PR closed unmerged;
+ *                    `failure_reason` carries the discriminator.
+ *   - `cancelled`  — operator hit POST /plan-runs/:id/cancel.
+ *
+ * TS-only narrowing — no SQL CHECK constraint (mx-2ab984).
+ */
+export const PLAN_RUN_STATES = ["queued", "running", "succeeded", "failed", "cancelled"] as const;
+export type PlanRunState = (typeof PLAN_RUN_STATES)[number];
+
+export const PLAN_RUN_TERMINAL_STATES = [
+	"succeeded",
+	"failed",
+	"cancelled",
+] as const satisfies readonly PlanRunState[];
+export type PlanRunTerminalState = (typeof PLAN_RUN_TERMINAL_STATES)[number];
+
+/**
+ * Per-child lifecycle within a plan-run (pl-a258 step 2 / warren-4d7c).
+ *
+ *   - `pending`    — child seed not yet dispatched; waiting for its turn.
+ *   - `dispatched` — coordinator called spawnRun and stamped `run_id`; the
+ *                    warren run row may still be `queued` at this instant.
+ *   - `running`    — the linked run reached `running`.
+ *   - `pr_open`    — the linked run succeeded and reap opened a PR (or
+ *                    landed a zero-commit "trivially merged" push).
+ *   - `merged`     — PR merged (poll-confirmed via GitHub) OR the
+ *                    trivial-merge path advanced directly.
+ *   - `failed`     — the linked run terminal-failed, the PR closed
+ *                    unmerged, or the dispatch itself errored.
+ *   - `skipped`    — resume semantics (warren-fcc9): the child's seed was
+ *                    already `closed` at dispatch time, so the coordinator
+ *                    advanced without spawning a run.
+ *
+ * TS-only narrowing — no SQL CHECK constraint (mx-2ab984).
+ */
+export const PLAN_RUN_CHILD_STATES = [
+	"pending",
+	"dispatched",
+	"running",
+	"pr_open",
+	"merged",
+	"failed",
+	"skipped",
+] as const;
+export type PlanRunChildState = (typeof PLAN_RUN_CHILD_STATES)[number];
+
+export const PLAN_RUN_CHILD_TERMINAL_STATES = [
+	"merged",
+	"failed",
+	"skipped",
+] as const satisfies readonly PlanRunChildState[];
+export type PlanRunChildTerminalState = (typeof PLAN_RUN_CHILD_TERMINAL_STATES)[number];
+
+/**
  * Physical table names. Centralized so the two dialect modules and the drift
  * check stay in lockstep — renaming a table is a one-line change here.
  */
@@ -104,6 +168,8 @@ export const TABLE_NAMES = {
 	triggers: "triggers",
 	workers: "workers",
 	burrows: "burrows",
+	planRuns: "plan_runs",
+	planRunChildren: "plan_run_children",
 } as const;
 
 /**
@@ -129,6 +195,16 @@ export const INDEX_NAMES = {
 	// would let two rows with (NULL, "claude-code") coexist.
 	agentsProjectName: "agents_project_name_idx",
 	agentsGlobalName: "agents_global_name_idx",
+	// pl-a258 step 2 (warren-4d7c). plan_runs walk is sequential per project;
+	// `plan_runs_project_state` powers the API's listByProjectAndState filter
+	// and `plan_runs_state` powers the coordinator's `listActive()` (queued |
+	// running) call. plan_run_children rolls up by (plan_run_id, state) for
+	// `pickNextPending` and the detail page's child counts; `plan_run_children_run`
+	// reverses the run_id → child lookup the reap path uses.
+	planRunsProjectState: "plan_runs_project_state_idx",
+	planRunsState: "plan_runs_state_idx",
+	planRunChildrenRun: "plan_run_children_run_idx",
+	planRunChildrenState: "plan_run_children_state_idx",
 } as const;
 
 /**

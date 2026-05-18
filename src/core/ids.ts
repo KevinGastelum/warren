@@ -20,6 +20,7 @@ const SUFFIX_LEN = 12;
 const PREFIXES = {
 	project: "prj",
 	run: "run",
+	planRun: "plnr",
 } as const;
 
 export type IdKind = keyof typeof PREFIXES;

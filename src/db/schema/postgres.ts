@@ -29,6 +29,7 @@ import {
 	integer,
 	jsonb,
 	pgTable,
+	primaryKey,
 	serial,
 	text,
 	uniqueIndex,
@@ -36,6 +37,8 @@ import {
 import {
 	EVENT_STREAMS,
 	INDEX_NAMES,
+	PLAN_RUN_CHILD_STATES,
+	PLAN_RUN_STATES,
 	PREVIEW_STATES,
 	RUN_FAILURE_REASONS,
 	RUN_STATES,
@@ -175,6 +178,65 @@ export const burrows = pgTable(
 	(t) => [index(INDEX_NAMES.burrowsWorker).on(t.workerId)],
 );
 
+/**
+ * Plan-run coordinator state (pl-a258 step 2 / warren-4d7c) — mirror of
+ * sqlite. See sqlite.ts for shape + state-machine intent.
+ */
+export const planRuns = pgTable(
+	TABLE_NAMES.planRuns,
+	{
+		id: text("id").primaryKey(),
+		planId: text("plan_id").notNull(),
+		projectId: text("project_id")
+			.notNull()
+			.references(() => projects.id, { onDelete: "cascade" }),
+		agentName: text("agent_name").notNull(),
+		promptTemplate: text("prompt_template").notNull().default("work on sd {seed_id}"),
+		ref: text("ref"),
+		providerOverride: text("provider_override"),
+		modelOverride: text("model_override"),
+		dispatcherHandle: text("dispatcher_handle").notNull().default("operator"),
+		trigger: text("trigger").notNull().default("manual"),
+		state: text("state", { enum: PLAN_RUN_STATES }).notNull(),
+		failureReason: text("failure_reason"),
+		createdAt: text("created_at").notNull(),
+		startedAt: text("started_at"),
+		endedAt: text("ended_at"),
+	},
+	(t) => [
+		index(INDEX_NAMES.planRunsProjectState).on(t.projectId, t.state),
+		index(INDEX_NAMES.planRunsState).on(t.state),
+	],
+);
+
+/**
+ * Per-child plan-run progress (pl-a258 step 2 / warren-4d7c) — mirror of
+ * sqlite. See sqlite.ts for shape + state-machine intent.
+ */
+export const planRunChildren = pgTable(
+	TABLE_NAMES.planRunChildren,
+	{
+		planRunId: text("plan_run_id")
+			.notNull()
+			.references(() => planRuns.id, { onDelete: "cascade" }),
+		seq: integer("seq").notNull(),
+		seedId: text("seed_id").notNull(),
+		runId: text("run_id").references(() => runs.id, { onDelete: "set null" }),
+		state: text("state", { enum: PLAN_RUN_CHILD_STATES }).notNull(),
+		createdAt: text("created_at").notNull(),
+		updatedAt: text("updated_at").notNull(),
+		startedAt: text("started_at"),
+		endedAt: text("ended_at"),
+		prMergedAt: text("pr_merged_at"),
+		failureReason: text("failure_reason"),
+	},
+	(t) => [
+		primaryKey({ columns: [t.planRunId, t.seq] }),
+		index(INDEX_NAMES.planRunChildrenRun).on(t.runId),
+		index(INDEX_NAMES.planRunChildrenState).on(t.planRunId, t.state),
+	],
+);
+
 export type AgentRow = typeof agents.$inferSelect;
 export type AgentInsert = typeof agents.$inferInsert;
 export type ProjectRow = typeof projects.$inferSelect;
@@ -189,3 +251,7 @@ export type WorkerRow = typeof workers.$inferSelect;
 export type WorkerInsert = typeof workers.$inferInsert;
 export type BurrowRow = typeof burrows.$inferSelect;
 export type BurrowInsert = typeof burrows.$inferInsert;
+export type PlanRunRow = typeof planRuns.$inferSelect;
+export type PlanRunInsert = typeof planRuns.$inferInsert;
+export type PlanRunChildRow = typeof planRunChildren.$inferSelect;
+export type PlanRunChildInsert = typeof planRunChildren.$inferInsert;
