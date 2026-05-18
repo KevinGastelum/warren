@@ -26,6 +26,7 @@ export function NewPlanRunPage() {
 	const [agent, setAgent] = useState("");
 	const [agentTouched, setAgentTouched] = useState(false);
 	const [planId, setPlanId] = useState("");
+	const [plotId, setPlotId] = useState("");
 	const [promptTemplate, setPromptTemplate] = useState(DEFAULT_PROMPT_TEMPLATE);
 	const [promptTouched, setPromptTouched] = useState(false);
 	const [ref, setRef] = useState("");
@@ -51,6 +52,7 @@ export function NewPlanRunPage() {
 
 	const selectedProject = projects.data?.projects.find((p) => p.id === project);
 	const hasSeeds = selectedProject?.hasSeeds ?? false;
+	const hasPlot = selectedProject?.hasPlot ?? false;
 
 	const defaultRole = warrenConfig.data?.defaults?.defaultRole;
 	const defaultProvider = warrenConfig.data?.defaults?.defaultProvider;
@@ -110,6 +112,7 @@ export function NewPlanRunPage() {
 		const trimmedRef = ref.trim();
 		const trimmedProvider = providerOverride.trim();
 		const trimmedModel = modelOverride.trim();
+		const trimmedPlotId = plotId.trim();
 		dispatch.mutate({
 			project,
 			planId: trimmedPlanId,
@@ -118,6 +121,7 @@ export function NewPlanRunPage() {
 			...(trimmedRef.length > 0 ? { ref: trimmedRef } : {}),
 			...(trimmedProvider.length > 0 ? { providerOverride: trimmedProvider } : {}),
 			...(trimmedModel.length > 0 ? { modelOverride: trimmedModel } : {}),
+			...(hasPlot && trimmedPlotId.length > 0 ? { plotId: trimmedPlotId } : {}),
 		});
 	};
 
@@ -227,6 +231,25 @@ export function NewPlanRunPage() {
 								the project to list).
 							</p>
 						</div>
+
+						{hasSeeds && hasPlot ? (
+							<div className="space-y-1.5">
+								<Label htmlFor="plotId">Plot ID (optional)</Label>
+								<Input
+									id="plotId"
+									value={plotId}
+									onChange={(e) => setPlotId(e.target.value)}
+									placeholder="plot_…"
+									autoComplete="off"
+									spellCheck={false}
+								/>
+								<p className="text-xs text-(--color-muted-foreground)">
+									Bind this plan run to a Plot. Each child run inherits
+									PLOT_ID; the Plot auto-transitions to <code className="font-mono">done</code>{" "}
+									when every child merges.
+								</p>
+							</div>
+						) : null}
 
 						<div className="space-y-1.5">
 							<Label htmlFor="promptTemplate">Prompt template</Label>

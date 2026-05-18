@@ -465,6 +465,15 @@ export interface PlanRunRow {
 	createdAt: string;
 	startedAt: string | null;
 	endedAt: string | null;
+	/**
+	 * Back-link to the Plot this PlanRun was dispatched against
+	 * (warren-06dc / pl-7937 Phase 2). Null when the project hasn't opted
+	 * into Plots (`project.hasPlot` false) or the dispatch omitted plot_id.
+	 * Threaded through every child run's spawn so per-child `run_dispatched`
+	 * events and PLOT_ID/PLOT_ACTOR env injection light up via the Phase 1
+	 * single-run path unchanged.
+	 */
+	plotId: string | null;
 }
 
 export interface PlanRunChildRow {
@@ -491,6 +500,14 @@ export interface CreatePlanRunInput {
 	providerOverride?: string;
 	modelOverride?: string;
 	dispatcherHandle?: string;
+	/**
+	 * Optional back-link to the Plot this PlanRun is dispatched against
+	 * (warren-06dc / pl-7937 Phase 2). The server validates that the
+	 * project has a `.plot/` directory (`project.hasPlot`); supplying
+	 * plot_id for a project without Plots returns a 400 with code
+	 * `project_lacks_plot`.
+	 */
+	plotId?: string;
 }
 
 /** `POST /plan-runs` 201 response envelope. */

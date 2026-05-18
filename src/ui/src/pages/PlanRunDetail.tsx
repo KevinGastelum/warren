@@ -122,6 +122,16 @@ export function PlanRunDetailPage() {
 						<span className="font-mono text-xs">{planRun.ref}</span>
 					</MetaCard>
 				) : null}
+				{planRun.plotId !== null ? (
+					<MetaCard label="Plot">
+						<Link
+							to={`/plots/${encodeURIComponent(planRun.plotId)}`}
+							className="font-mono text-xs underline-offset-2 hover:underline"
+						>
+							{planRun.plotId}
+						</Link>
+					</MetaCard>
+				) : null}
 				<MetaCard label="Created">{relativeTime(planRun.createdAt)}</MetaCard>
 			</div>
 
