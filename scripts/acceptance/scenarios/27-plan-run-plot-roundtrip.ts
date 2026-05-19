@@ -26,7 +26,9 @@
  * Two plans live in the fixture so we can hit both the plot-bound dispatch
  * and the byte-identical baseline against the same project:
  *   - pl-acc-27-plot — 3 children (ah-acc-27-a, ah-acc-27-b open; ah-acc-27-c
- *     listed in WARREN_STUB_NO_COMMIT_SEEDS → trivial-merge branch).
+ *     listed in WARREN_STUB_NO_COMMIT_SEEDS so the agent makes no commit on
+ *     that child — exercises the host-side `run_dispatched` appender on a
+ *     no-agent-work run).
  *   - pl-acc-27-base — 1 child (ah-acc-27-d open) used for the no-plot baseline.
  *
  * Plot append durability: host-side appenders (the `plan_run_dispatched`
@@ -209,9 +211,12 @@ export const scenario: Scenario = {
 					// short-circuits to merged without a real GitHub fixture
 					// (matches scenario 26).
 					WARREN_GH_FETCH_OVERRIDE: "merged",
-					// Drive the trivial-merge branch on SEED_C: the stub agent
-					// skips workspace mutations, reap reports commitsAhead=0,
-					// the coordinator advances without GH polling.
+					// SEED_C: stub agent skips its workspace commit so the
+					// only delta on the workspace branch is reap's
+					// host-side `chore(warren): plot state` (warren-343a),
+					// carrying the per-child `run_dispatched` line back to
+					// origin. Exercises the host-appender path on a child
+					// where the agent produced no work of its own.
 					WARREN_STUB_NO_COMMIT_SEEDS: SEED_C,
 					WARREN_PLAN_RUN_TICK_MS: "1000",
 				},
@@ -338,24 +343,32 @@ export const scenario: Scenario = {
 					);
 				}
 
-				const trivialChild = finished.children.find((c) => c.seedId === SEED_C);
-				if (trivialChild === undefined) {
+				const noAgentCommitChild = finished.children.find((c) => c.seedId === SEED_C);
+				if (noAgentCommitChild === undefined) {
 					throw new AcceptanceError(`plot-bound PlanRun: missing child for ${SEED_C}`);
 				}
-				const trivialRun = finished.runs.find((r) => r.id === trivialChild.runId);
-				if (trivialRun === undefined) {
+				const noAgentCommitRun = finished.runs.find((r) => r.id === noAgentCommitChild.runId);
+				if (noAgentCommitRun === undefined) {
 					throw new AcceptanceError(
-						`plot-bound PlanRun: could not locate the fanned-out run for trivial-merge child (runId=${trivialChild.runId})`,
+						`plot-bound PlanRun: could not locate the fanned-out run for no-agent-commit child (runId=${noAgentCommitChild.runId})`,
 					);
 				}
-				assertEqual(
-					trivialRun.prUrl,
-					null,
-					`plot-bound PlanRun: ${SEED_C} run's prUrl stays null (no-commit child → trivial-merge)`,
+				// Post-warren-343a: even when the agent commits nothing,
+				// reap's stagePlotForCommit lands a `chore(warren): plot
+				// state` commit on the workspace branch carrying the
+				// per-child `run_dispatched` line (and any other host-side
+				// appender writes) back to origin. commitsAhead is therefore
+				// ≥ 1 and reap opens a PR — the "trivial-merge no-PR"
+				// contract only holds for plot-less projects (scenario 26
+				// covers that path). The child still reaches `merged` via
+				// the WARREN_GH_FETCH_OVERRIDE=merged stub.
+				assertTrue(
+					typeof noAgentCommitRun.prUrl === "string" && noAgentCommitRun.prUrl.length > 0,
+					`plot-bound PlanRun: ${SEED_C} run opens a PR even with no agent commit — stagePlotForCommit authors a 'chore(warren): plot state' commit for the host-side .plot/ delta (warren-343a) so commitsAhead > 0`,
 				);
 				assertTrue(
-					runDispatchedSet.has(trivialRun.id),
-					`plot-bound PlanRun: trivial-merge child ${trivialRun.id} produced a run_dispatched Plot event (Phase 1 appender independent of commitsAhead)`,
+					runDispatchedSet.has(noAgentCommitRun.id),
+					`plot-bound PlanRun: no-agent-commit child ${noAgentCommitRun.id} produced a run_dispatched Plot event (Phase 1 appender independent of commitsAhead)`,
 				);
 
 				// (warren-b290 / pl-7937 step 5) plot.status flips
