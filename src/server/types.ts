@@ -13,6 +13,7 @@ import type { BurrowClientPool } from "../burrow-client/pool.ts";
 import type { AnyWarrenDb } from "../db/client.ts";
 import type { Repos } from "../db/repos/index.ts";
 import type { PlanRunPlotAppender } from "../plan-runs/plot-appender.ts";
+import type { PlanSynthesizer } from "../plot-plan-runs/index.ts";
 import type { PreviewAuth } from "../preview/cookie.ts";
 import type { SpawnFn } from "../projects/clone.ts";
 import type { ProjectsConfig } from "../projects/config.ts";
@@ -317,6 +318,17 @@ export interface ServerDeps {
 	 * `defaultPlotQuestionAnswerer`.
 	 */
 	readonly plotQuestionAnswerer?: import("../plots/index.ts").PlotQuestionAnswerer;
+	/**
+	 * Server-side plot→plan-run synthesizer (warren-99b2 / pl-f404 step 3
+	 * / SPEC §11.Q). `POST /plot-plan-runs` shells out via this seam to
+	 * mint a fresh throwaway parent seed and a seeds plan whose children
+	 * adopt the Plot's open `seeds_issue` attachments. `bootServer` wires
+	 * `createDefaultPlanSynthesizer({ seedsCli })` when `seedsCli` is
+	 * configured; tests substitute a stub to assert payload shape without
+	 * shelling out. Undefined → the handler rejects with the same
+	 * "seeds CLI not configured" error `POST /plan-runs` uses.
+	 */
+	readonly planSynthesizer?: PlanSynthesizer;
 }
 
 /**

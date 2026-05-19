@@ -38,6 +38,7 @@ import {
 	defaultPlotStatusSetter,
 	loadPlanRunCoordinatorConfigFromEnv,
 } from "../plan-runs/index.ts";
+import { createDefaultPlanSynthesizer } from "../plot-plan-runs/index.ts";
 import {
 	createPlotAggregator,
 	createPlotResolver,
@@ -412,6 +413,9 @@ export async function bootServer(opts: BootServerOptions = {}): Promise<WarrenSe
 		plotResolver: createPlotResolver({
 			projectsRepo: repos.projects,
 			aggregator: plotAggregator,
+		}),
+		planSynthesizer: createDefaultPlanSynthesizer({
+			seedsCli: { sdBinary: schedulerConfig.sdBinary, spawn: defaultSpawn },
 		}),
 		...(opts.now !== undefined ? { now: opts.now } : {}),
 	};
