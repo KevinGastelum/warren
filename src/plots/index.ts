@@ -119,6 +119,12 @@ export {
 	type TimelineKind,
 } from "./summary.ts";
 export {
+	defaultPlotSyncer,
+	type PlotSyncer,
+	type PlotSyncRequest,
+	type PlotSyncResult,
+} from "./sync.ts";
+export {
 	buildIntentGoalPreview,
 	INTENT_GOAL_PREVIEW_MAX,
 	type PlotSummary,
