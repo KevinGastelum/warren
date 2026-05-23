@@ -1,5 +1,46 @@
 {
-  "attachments": [],
+  "attachments": [
+    {
+      "added_at": "2026-05-23T06:10:00.848Z",
+      "added_by": "user:jayminwest",
+      "id": "att-001",
+      "ref": "pl-4ed6",
+      "role": "tracks",
+      "type": "seeds_issue"
+    },
+    {
+      "added_at": "2026-05-23T06:10:03.329Z",
+      "added_by": "user:jayminwest",
+      "id": "att-002",
+      "ref": "warren-fb3c",
+      "role": "tracks",
+      "type": "seeds_issue"
+    },
+    {
+      "added_at": "2026-05-23T06:10:03.370Z",
+      "added_by": "user:jayminwest",
+      "id": "att-003",
+      "ref": "warren-0155",
+      "role": "tracks",
+      "type": "seeds_issue"
+    },
+    {
+      "added_at": "2026-05-23T06:10:03.408Z",
+      "added_by": "user:jayminwest",
+      "id": "att-004",
+      "ref": "warren-1dd6",
+      "role": "tracks",
+      "type": "seeds_issue"
+    },
+    {
+      "added_at": "2026-05-23T06:10:03.446Z",
+      "added_by": "user:jayminwest",
+      "id": "att-005",
+      "ref": "warren-e77d",
+      "role": "tracks",
+      "type": "seeds_issue"
+    }
+  ],
   "created_at": "2026-05-23T04:49:39.001Z",
   "id": "plot-302d6f6a",
   "intent": {
@@ -18,5 +59,5 @@
   "name": "Untitled brainstorm",
   "schema_version": 1,
   "status": "ready",
-  "updated_at": "2026-05-23T05:54:10.233Z"
+  "updated_at": "2026-05-23T06:10:03.446Z"
 }
