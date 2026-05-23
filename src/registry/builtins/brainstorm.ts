@@ -102,9 +102,9 @@ export const BRAINSTORM_BUILTIN: AgentDefinition = {
 		source: "builtin",
 		tags: ["agent", "interactive"],
 		// warren-ebca: brainstorm is a system-prompt-only canopy agent; it
-		// dispatches onto the claude-code burrow runtime rather than
-		// registering its own. Without this, burrow looks up "brainstorm"
-		// in BUILT_IN_RUNTIMES and the run fails before agent boot.
-		runtime: "claude-code",
+		// dispatches onto the pi burrow runtime rather than registering
+		// its own. Without this, burrow looks up "brainstorm" in
+		// BUILT_IN_RUNTIMES and the run fails before agent boot.
+		runtime: "pi",
 	},
 };

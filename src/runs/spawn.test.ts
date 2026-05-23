@@ -669,6 +669,13 @@ describe("spawnRun", () => {
 		const dispatch = calls.find((c) => c.path === "/burrows/bur_aaaaaaaaaaaa/runs");
 		expect(dispatch).toBeDefined();
 		expect((dispatch?.body as { agentId: string }).agentId).toBe("claude-code");
+		// warren-53e6: the same runtime id has to ride on the `up` call so
+		// burrow's collectToolchainPaths mounts claude's binary into the
+		// sandbox. Without this, bwrap fails `execvp claude: No such file or
+		// directory` ~17s into the run.
+		const up = calls.find((c) => c.path === "/burrows");
+		expect(up).toBeDefined();
+		expect((up?.body as { agents: readonly string[] }).agents).toEqual(["claude-code"]);
 	});
 
 	test("dispatch falls back to agent.name when frontmatter.runtime is unset (warren-ebca)", async () => {

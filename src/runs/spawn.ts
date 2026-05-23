@@ -373,7 +373,7 @@ export async function spawnRun(input: SpawnRunInput): Promise<SpawnRunResult> {
 			projectAfterRefresh.localPath,
 			projectAfterRefresh.gitUrl,
 			burrowConfig.network,
-			agent.name,
+			readRuntimeId(agent),
 			seedResult.files,
 			branch,
 			plotEnv,
@@ -656,12 +656,14 @@ async function provisionBurrow(
 	branch: string,
 	env: Record<string, string> | null,
 ): Promise<Burrow> {
-	// Warren's canopy agent name is the burrow runtime id by convention
-	// (claude-code → claude-code). Forwarding it as a `[[agents]]` patch row
-	// at up-time lets burrow mount the runtime's binary into the sandbox
-	// even when the project clone has no burrow.toml — without this,
-	// collectToolchainPaths returns [] and bwrap fails `execvp claude`
-	// (warren-8526 / burrow-55e3).
+	// Caller forwards the burrow *runtime id* (`readRuntimeId(agent)`), not
+	// the canopy agent name. Burrow's `up` resolves toolchain mounts by
+	// looking each id up in its runtime registry (claude-code / sapling /
+	// pi / codex). Interactive built-ins like brainstorm and planner compose
+	// onto claude-code via `frontmatter.runtime` — passing their canopy
+	// name here would mean burrow's registry.get returns nothing,
+	// collectToolchainPaths returns [], and bwrap fails `execvp claude`
+	// at run start (warren-8526 / burrow-55e3, regression warren-53e6).
 	//
 	// The seed payload (R-07) rides on the same up call so provisioning +
 	// `.canopy/`/`.mulch/`/`.seeds/`/`.pi/` drops are atomic: a failed seed

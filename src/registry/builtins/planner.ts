@@ -79,9 +79,9 @@ export const PLANNER_BUILTIN: AgentDefinition = {
 		source: "builtin",
 		tags: ["agent", "interactive"],
 		// warren-ebca: planner is a system-prompt-only canopy agent; it
-		// dispatches onto the claude-code burrow runtime rather than
-		// registering its own. Without this, burrow looks up "planner"
-		// in BUILT_IN_RUNTIMES and the run fails before agent boot.
-		runtime: "claude-code",
+		// dispatches onto the pi burrow runtime rather than registering
+		// its own. Without this, burrow looks up "planner" in
+		// BUILT_IN_RUNTIMES and the run fails before agent boot.
+		runtime: "pi",
 	},
 };

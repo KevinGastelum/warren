@@ -18,6 +18,7 @@ domains:
   acceptance: {}
   dockerfile: {}
   plots: {}
+  warren: {}
 governance:
   max_entries: 100
   warn_entries: 150
