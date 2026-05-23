@@ -335,7 +335,7 @@ export interface ReapCompletedPayload {
 	/** PR URL when reap auto-opened one (warren-f6af). */
 	prUrl?: string | null;
 	mulch?: { updated?: number; skipped?: number; appended?: number };
-	seeds?: { closed?: number };
+	seeds?: { closed?: number; committed?: boolean };
 	errors?: { step: string; message: string; path?: string }[];
 }
 

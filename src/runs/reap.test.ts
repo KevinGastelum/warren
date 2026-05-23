@@ -2035,4 +2035,193 @@ describe("reapRun", () => {
 		expect(gitArgs.find((a) => a.includes("add"))).toBeUndefined();
 		expect(gitArgs.find((a) => a.includes("commit"))).toBeUndefined();
 	});
+
+	/* ------------------------------------------------------------------ */
+	/* warren-7ecc: commit-through-reap for .seeds/                        */
+	/* ------------------------------------------------------------------ */
+
+	async function setupWithSeeds(): Promise<Ctx> {
+		const db = await openDatabase({ path: ":memory:" });
+		const repos = createRepos(db);
+		await repos.agents.upsert({
+			name: "refactor-bot",
+			renderedJson: { sections: { system: "x" } },
+		});
+		const project = await repos.projects.create({
+			gitUrl: "https://github.com/x/y.git",
+			localPath: "/data/projects/x/y",
+			defaultBranch: "main",
+			hasSeeds: true,
+		});
+		const run = await repos.runs.create({
+			agentName: "refactor-bot",
+			projectId: project.id,
+			prompt: "p",
+			renderedAgentJson: {},
+			trigger: "manual",
+			burrowId: "bur_aaaaaaaaaaaa",
+			burrowRunId: "run_zzzzzzzzzzzz",
+		});
+		await repos.burrows.create({ id: "bur_aaaaaaaaaaaa", workerId: "local" });
+		await repos.runs.markRunning(run.id);
+		return {
+			db,
+			repos,
+			broker: new RunEventBroker(),
+			runId: run.id,
+			projectPath: project.localPath,
+			workspacePath: "/data/burrow/ws",
+		};
+	}
+
+	test("authors a warren commit when project .seeds/ has a delta the agent never committed (warren-7ecc)", async () => {
+		const seedsCtx = await setupWithSeeds();
+		try {
+			const f = fakeFs({
+				"/data/projects/x/y/.seeds/issues.jsonl":
+					'{"id":"warren-1234","status":"open","updatedAt":"2026-05-22T10:00:00Z"}\n',
+				"/data/projects/x/y/.seeds/plans.jsonl":
+					'{"id":"pl-abcd","status":"open","updatedAt":"2026-05-22T10:00:00Z"}\n',
+			});
+			const e = fakeExec({ stagedDelta: true });
+
+			const result = await reapRun({
+				runId: seedsCtx.runId,
+				outcome: "succeeded",
+				repos: seedsCtx.repos,
+				burrowClientPool: await makePool(fakeBurrowClient(makeBurrow()), seedsCtx.repos),
+				fs: f.fs,
+				exec: e.exec,
+			});
+
+			expect(result.seedsCommitted).toBe(true);
+			expect(f.files.get("/data/burrow/ws/.seeds/issues.jsonl")).toContain("warren-1234");
+			expect(f.files.get("/data/burrow/ws/.seeds/plans.jsonl")).toContain("pl-abcd");
+			const gitArgs = e.calls.filter((c) => c.cmd === "git").map((c) => c.args);
+			expect(gitArgs).toContainEqual(["add", "--", ".seeds/"]);
+			expect(gitArgs).toContainEqual(["diff", "--cached", "--quiet", "--", ".seeds/"]);
+			const commit = gitArgs.find((a) => a[0] === "-c" && a.includes("commit"));
+			expect(commit).toEqual([
+				"-c",
+				"user.name=warren",
+				"-c",
+				"user.email=warren@os-eco.dev",
+				"commit",
+				"-m",
+				"chore(warren): seeds state",
+			]);
+			const events = await seedsCtx.repos.events.listByRun(seedsCtx.runId);
+			expect(events.find((ev) => ev.kind === "reap.seeds_committed")).toBeDefined();
+		} finally {
+			await seedsCtx.db.close();
+		}
+	});
+
+	test("does not commit when the agent already committed every .seeds/ delta", async () => {
+		const seedsCtx = await setupWithSeeds();
+		try {
+			const f = fakeFs({
+				"/data/projects/x/y/.seeds/issues.jsonl":
+					'{"id":"warren-1234","status":"open","updatedAt":"2026-05-22T10:00:00Z"}\n',
+			});
+			const e = fakeExec({ stagedDelta: false });
+
+			const result = await reapRun({
+				runId: seedsCtx.runId,
+				outcome: "succeeded",
+				repos: seedsCtx.repos,
+				burrowClientPool: await makePool(fakeBurrowClient(makeBurrow()), seedsCtx.repos),
+				fs: f.fs,
+				exec: e.exec,
+			});
+
+			expect(result.seedsCommitted).toBe(false);
+			const commit = e.calls.find((c) => c.cmd === "git" && c.args.includes("commit"));
+			expect(commit).toBeUndefined();
+			const events = await seedsCtx.repos.events.listByRun(seedsCtx.runId);
+			expect(events.find((ev) => ev.kind === "reap.seeds_committed")).toBeUndefined();
+		} finally {
+			await seedsCtx.db.close();
+		}
+	});
+
+	test("skips .seeds/config.yaml + .seeds/templates.jsonl when copying into the workspace", async () => {
+		const seedsCtx = await setupWithSeeds();
+		try {
+			const f = fakeFs({
+				"/data/projects/x/y/.seeds/issues.jsonl":
+					'{"id":"warren-1234","status":"open","updatedAt":"2026-05-22T10:00:00Z"}\n',
+				"/data/projects/x/y/.seeds/config.yaml": 'project: "x"\n',
+				"/data/projects/x/y/.seeds/templates.jsonl": '{"id":"t1"}\n',
+			});
+			const e = fakeExec({ stagedDelta: true });
+
+			await reapRun({
+				runId: seedsCtx.runId,
+				outcome: "succeeded",
+				repos: seedsCtx.repos,
+				burrowClientPool: await makePool(fakeBurrowClient(makeBurrow()), seedsCtx.repos),
+				fs: f.fs,
+				exec: e.exec,
+			});
+
+			expect(f.files.get("/data/burrow/ws/.seeds/issues.jsonl")).toBeDefined();
+			expect(f.files.get("/data/burrow/ws/.seeds/config.yaml")).toBeUndefined();
+			expect(f.files.get("/data/burrow/ws/.seeds/templates.jsonl")).toBeUndefined();
+		} finally {
+			await seedsCtx.db.close();
+		}
+	});
+
+	test("planner-default-prompt round trip: warren commit keeps reap.empty_push silent (warren-7ecc)", async () => {
+		const seedsCtx = await setupWithSeeds();
+		try {
+			const f = fakeFs({
+				"/data/projects/x/y/.seeds/issues.jsonl":
+					'{"id":"warren-1234","status":"open","updatedAt":"2026-05-22T10:00:00Z"}\n',
+				"/data/projects/x/y/.seeds/plans.jsonl":
+					'{"id":"pl-abcd","status":"open","updatedAt":"2026-05-22T10:00:00Z"}\n',
+			});
+			const e = fakeExec({ stagedDelta: true, revListCount: "1" });
+
+			const result = await reapRun({
+				runId: seedsCtx.runId,
+				outcome: "succeeded",
+				repos: seedsCtx.repos,
+				burrowClientPool: await makePool(fakeBurrowClient(makeBurrow()), seedsCtx.repos),
+				fs: f.fs,
+				exec: e.exec,
+			});
+
+			expect(result.seedsCommitted).toBe(true);
+			expect(result.branchPushed).toBe(true);
+			expect(result.commitsAhead).toBe(1);
+			const events = await seedsCtx.repos.events.listByRun(seedsCtx.runId);
+			expect(events.find((ev) => ev.kind === "reap.empty_push")).toBeUndefined();
+		} finally {
+			await seedsCtx.db.close();
+		}
+	});
+
+	test("project without .seeds/ skips the seeds_commit step entirely", async () => {
+		const f = fakeFs({
+			"/data/projects/x/y/.seeds/issues.jsonl": '{"id":"warren-1234","status":"open"}\n',
+		});
+		const e = fakeExec({ stagedDelta: true });
+
+		const result = await reapRun({
+			runId: ctx.runId,
+			outcome: "succeeded",
+			repos: ctx.repos,
+			burrowClientPool: await makePool(fakeBurrowClient(makeBurrow()), ctx.repos),
+			fs: f.fs,
+			exec: e.exec,
+		});
+
+		expect(result.seedsCommitted).toBe(false);
+		expect(f.files.get("/data/burrow/ws/.seeds/issues.jsonl")).toBeUndefined();
+		const gitArgs = e.calls.filter((c) => c.cmd === "git").map((c) => c.args);
+		expect(gitArgs.find((a) => a.includes("add") && a.includes(".seeds/"))).toBeUndefined();
+		expect(gitArgs.find((a) => a.includes("commit"))).toBeUndefined();
+	});
 });

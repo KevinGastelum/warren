@@ -2395,7 +2395,8 @@ function InteractivePanel({ plot, frozen }: { plot: PlotEnvelope; frozen: boolea
 }
 
 const BRAINSTORM_OPENER = "I want to sharpen the intent of this Plot. Help me think through what it's really for.";
-const PLANNER_OPENER = "Read the Plot intent, scout the repo, and propose a structured plan.";
+const PLANNER_OPENER =
+	"Read the Plot intent, scout the repo, and submit a structured plan (sd plan submit). Warren will commit and push your .seeds/ + .plot/ deltas at reap; you don't need to run git.";
 
 function DispatchInteractiveDialog({
 	plotId,

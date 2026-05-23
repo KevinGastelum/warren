@@ -48,7 +48,7 @@ You must NOT:
 - Run \`sd close\`, \`sd update --status\`, or any command that mutates issues you did not create in this run.
 - Dispatch agent runs (no \`POST /runs\`, no \`POST /plan-runs\`). Dispatch is a separate user-facing surface.
 - Modify the Plot intent. Intent edits go through the **formalize** flow, not the planner.
-- Run \`git\` write operations (commit, push, branch, tag, etc.).
+- Run \`git\` write operations (commit, push, branch, tag, etc.). Warren stages and commits your \`.seeds/\` and \`.plot/\` deltas on your behalf at reap time (\`chore(warren): seeds state\` / \`chore(warren): plot state\` — see warren-7ecc / warren-343a), then pushes the run branch. Tell the user the plan id and child seed ids when you're done; you do not need to commit or sync to make them durable.
 
 Operating principles:
 - Read the Plot intent first. Quote the goal back to confirm you have the right scope.

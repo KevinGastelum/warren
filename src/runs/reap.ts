@@ -233,6 +233,7 @@ export type ReapStep =
 	| "workspace_lookup"
 	| "mulch_merge"
 	| "seeds_close"
+	| "seeds_commit"
 	| "plot_merge"
 	| "plot_commit"
 	| "branch_push"
@@ -292,6 +293,22 @@ export interface ReapRunResult {
 	 * (the failure surfaces as a `reap_failed` step=`plot_commit` event).
 	 */
 	readonly plotCommitted: boolean;
+	/**
+	 * True when reap authored a `chore(warren): seeds state` commit in the
+	 * workspace before `branch_push` so origin's workspace branch carries
+	 * the `.seeds/` deltas (warren-7ecc). Mirrors `plotCommitted` (warren-
+	 * 343a, shape (a) commit-through-reap) but for the seeds tracker:
+	 * agents with narrowly-scoped write contracts (the planner, see
+	 * src/registry/builtins/planner.ts) are forbidden from running
+	 * `git commit`, so `sd plan submit` writes to `.seeds/issues.jsonl` +
+	 * `.seeds/plans.jsonl` and warren has to stage and commit them on the
+	 * agent's behalf — otherwise the push lands empty and the plan is lost.
+	 * Set when project has `.seeds/` and there's a real `.seeds/` delta the
+	 * agent never committed. False when nothing needed staging or when the
+	 * commit attempt failed (the failure surfaces as a `reap_failed`
+	 * step=`seeds_commit` event).
+	 */
+	readonly seedsCommitted: boolean;
 	readonly branchPushed: boolean;
 	/**
 	 * Commits the pushed branch is ahead of its base (warren-f3bb). `null`
@@ -367,6 +384,7 @@ export async function reapRun(input: ReapRunInput): Promise<ReapRunResult> {
 			plotsUpdated: 0,
 			plotEventsMirrored: 0,
 			plotCommitted: false,
+			seedsCommitted: false,
 			branchPushed: false,
 			commitsAhead: null,
 			prUrl: run.prUrl,
@@ -422,6 +440,7 @@ export async function reapRun(input: ReapRunInput): Promise<ReapRunResult> {
 	let plotsUpdated = 0;
 	let plotEventsMirrored = 0;
 	let plotCommitted = false;
+	let seedsCommitted = false;
 	let branchPushed = false;
 	let commitsAhead: number | null = null;
 	let prUrl: string | null = null;
@@ -508,6 +527,29 @@ export async function reapRun(input: ReapRunInput): Promise<ReapRunResult> {
 				});
 			} catch (err) {
 				await fail("plot_commit", err, join(workspacePath, ".plot"));
+			}
+		}
+
+		// warren-7ecc: same commit-through-reap shape as plot_commit but for
+		// `.seeds/`. Closes the planner-default-prompt bug: planner is
+		// forbidden from running `git commit` (src/registry/builtins/planner.ts
+		// system prompt), so its `sd plan submit` writes to
+		// `.seeds/issues.jsonl` + `.seeds/plans.jsonl` and warren has to
+		// stage and commit them on the agent's behalf — otherwise the push
+		// lands empty (reap.empty_push fires) and the spawned plan is lost.
+		// Skipped when the project has no `.seeds/`. Best-effort: failures
+		// emit `reap_failed` step=`seeds_commit` and do not fail the run.
+		if (project.hasSeeds) {
+			try {
+				seedsCommitted = await stageSeedsForCommit({
+					workspacePath,
+					projectPath: project.localPath,
+					fs,
+					exec,
+					emit,
+				});
+			} catch (err) {
+				await fail("seeds_commit", err, join(workspacePath, ".seeds"));
 			}
 		}
 
@@ -765,7 +807,7 @@ export async function reapRun(input: ReapRunInput): Promise<ReapRunResult> {
 		state: finalState,
 		failureReason,
 		mulch: { updated: mulchUpdated, skipped: mulchSkipped, appended: mulchAppended },
-		seeds: { closed: seedsClosed },
+		seeds: { closed: seedsClosed, committed: seedsCommitted },
 		plot: {
 			eventsAppended: plotEventsAppended,
 			plotsUpdated,
@@ -792,6 +834,7 @@ export async function reapRun(input: ReapRunInput): Promise<ReapRunResult> {
 			mulchSkipped,
 			mulchAppended,
 			seedsClosed,
+			seedsCommitted,
 			plotEventsAppended,
 			plotsUpdated,
 			plotEventsMirrored,
@@ -818,6 +861,7 @@ export async function reapRun(input: ReapRunInput): Promise<ReapRunResult> {
 		plotsUpdated,
 		plotEventsMirrored,
 		plotCommitted,
+		seedsCommitted,
 		branchPushed,
 		commitsAhead,
 		prUrl,
@@ -1580,6 +1624,105 @@ async function stagePlotForCommit(input: StagePlotForCommitInput): Promise<boole
 	);
 	await emit("reap.plot_committed", {
 		message: "chore(warren): plot state",
+		filesStaged: copied,
+	});
+	return true;
+}
+
+/* ----------------------------------------------------------------------- */
+/* Seeds commit-through-reap (warren-7ecc)                                   */
+/* ----------------------------------------------------------------------- */
+
+/**
+ * Seeds-tracker files committed by warren on the agent's behalf. The
+ * SPEC for `.seeds/` (../seeds/SPEC.md) pins a flat layout of two
+ * jsonl carriers — `issues.jsonl` (the issue queue) and `plans.jsonl`
+ * (sd plan submit output, the planner's primary write). `config.yaml`
+ * and `templates.jsonl` are committed by the human at `sd init` time
+ * and don't get rewritten by agent activity, so excluding them keeps
+ * the warren-authored commit narrow.
+ */
+const SEEDS_COMMITTABLE_FILES: readonly string[] = ["issues.jsonl", "plans.jsonl"];
+
+interface StageSeedsForCommitInput {
+	readonly workspacePath: string;
+	readonly projectPath: string;
+	readonly fs: ReapFs;
+	readonly exec: ReapExec;
+	readonly emit: (kind: string, payload: unknown) => Promise<EventRow>;
+}
+
+/**
+ * Replicate `.seeds/issues.jsonl` + `.seeds/plans.jsonl` from the
+ * project clone into the burrow workspace, stage `.seeds/`, and author
+ * a `chore(warren): seeds state` commit when there's a real delta the
+ * agent never committed. Returns true when a warren-identity commit
+ * landed.
+ *
+ * The carrier shape mirrors stagePlotForCommit (warren-343a) — agents
+ * with narrowly-scoped write contracts (planner, see
+ * src/registry/builtins/planner.ts) are forbidden from running
+ * `git commit`. The planner's `sd plan submit` writes
+ * `.seeds/issues.jsonl` + `.seeds/plans.jsonl` inside the workspace;
+ * without this step the push exits zero, lands no work, and reap fires
+ * `reap.empty_push`. The project clone is the union point: by this
+ * step `mirrorClosedSeeds` has already merged closed-status rows from
+ * the workspace back into the project's `issues.jsonl`. Copying the
+ * union back into the workspace gives `git push` a single canonical
+ * view to ship to origin.
+ *
+ * `git add .seeds/` honors a project-level `.gitignore` of `.seeds/`
+ * — a project that gitignored the directory has opted out of
+ * committing seeds state, and the staged-changes check below sees no
+ * entries.
+ */
+async function stageSeedsForCommit(input: StageSeedsForCommitInput): Promise<boolean> {
+	const { workspacePath, projectPath, fs, exec, emit } = input;
+	const projectSeedsDir = join(projectPath, ".seeds");
+	const workspaceSeedsDir = join(workspacePath, ".seeds");
+
+	let copied = 0;
+	for (const name of SEEDS_COMMITTABLE_FILES) {
+		const contents = await fs.readFile(join(projectSeedsDir, name));
+		if (contents === null) continue;
+		if (copied === 0) await fs.mkdirp(workspaceSeedsDir);
+		await fs.writeFile(join(workspaceSeedsDir, name), contents);
+		copied += 1;
+	}
+	if (copied === 0) return false;
+
+	await exec.run("git", ["add", "--", ".seeds/"], {
+		cwd: workspacePath,
+		timeoutMs: 10_000,
+	});
+
+	let hasStagedDelta: boolean;
+	try {
+		await exec.run("git", ["diff", "--cached", "--quiet", "--", ".seeds/"], {
+			cwd: workspacePath,
+			timeoutMs: 10_000,
+		});
+		hasStagedDelta = false;
+	} catch {
+		hasStagedDelta = true;
+	}
+	if (!hasStagedDelta) return false;
+
+	await exec.run(
+		"git",
+		[
+			"-c",
+			"user.name=warren",
+			"-c",
+			"user.email=warren@os-eco.dev",
+			"commit",
+			"-m",
+			"chore(warren): seeds state",
+		],
+		{ cwd: workspacePath, timeoutMs: 10_000 },
+	);
+	await emit("reap.seeds_committed", {
+		message: "chore(warren): seeds state",
 		filesStaged: copied,
 	});
 	return true;
