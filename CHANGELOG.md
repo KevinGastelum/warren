@@ -7,6 +7,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.5] — 2026-05-23
+
+Patch release shipping the Plot sync feature end-to-end: warren can now
+push dirty `.plot/` state back to GitHub as a PR (with configurable
+merge strategy), both on-demand via a UI button and automatically in
+the background on formalize/status-change. Also fixes builtin agent
+drift detection on boot and switches the default provider to Google
+Gemini 3.5 Flash.
+
+### Added
+
+- **`feat(plots)`** — Plot sync module (`src/plots/sync.ts`,
+  warren-5bc2 / pl-5a6c). `defaultPlotSyncer.sync()` detects dirty
+  `.plot/` files via `git status --porcelain`, creates a temporary
+  worktree off `origin/<targetBranch>`, copies plot files, commits under
+  the warren bot identity, pushes the branch, opens a PR via the GitHub
+  API, and optionally merges it immediately based on `mergeStrategy`
+  (`immediate` | `auto` | `manual`). Worktree is cleaned up in a
+  `finally` block. Full test coverage in `sync.test.ts` (#85).
+- **`feat(config)`** — `plotSync` block in `DefaultsConfigSchema`
+  (warren-cd22 / pl-5a6c step 1). New `PlotSyncConfig` type with
+  optional `mergeStrategy` (immediate/auto/manual, default manual) and
+  `targetBranch` (defaults to project's `defaultBranch`). Schema
+  validation tests cover all merge strategies, empty block, omitted
+  block, and strict-mode rejection of unknown fields (#84).
+- **`feat(server)`** — `POST /plots/:id/sync` endpoint (warren-1d0c /
+  pl-5a6c step 3). Manual sync trigger with plot existence + project
+  `hasPlot` validation. Returns the `PlotSyncResult` envelope
+  (`no_op` | `synced` with branch/prUrl/merged). Server handler test
+  coverage for success, 404, and project-lacks-plot cases (#86).
+- **`feat(server)`** — Background auto-sync on formalize and
+  status-change (pl-5a6c step 3). `triggerBackgroundSync` fires-and-logs
+  after `POST /plots/:id/formalize` and `POST /plots/:id/status` so
+  Plot metadata flows to GitHub without manual intervention.
+- **`feat(ui)`** — `PlotSyncButton` on PlotDetail page (warren-1d0c /
+  pl-5a6c step 4). "Sync to GitHub" button with `GitBranch` icon,
+  loading spinner, success/error toast with auto-dismiss, and inline PR
+  link on success. Placed alongside the status transition control (#87).
+- **`chore(hooks)`** — Pre-commit hook (`scripts/hooks/pre-commit`)
+  runs `bun run lint` + `bun run typecheck` before every commit.
+  Installed via the new `prepare` script in `package.json`.
+
+### Changed
+
+- **`fix(registry)`** — `seedBuiltinAgents` now re-upserts built-in
+  agent rows whose content or frontmatter has drifted from the code
+  definition, while preserving library/project-tier overrides (#83).
+  Previously, a builtin seeded in a prior version (e.g. brainstorm
+  without `runtime: pi`) would never update, requiring manual DB
+  surgery. New `areDeepEqual` comparison + `readAgentSource` tier check.
+- **`chore(defaults)`** — Switch default provider to Google Gemini 3.5
+  Flash (`d8164d7`).
+
+## [0.5.4] — 2026-05-23
+
+Patch release. Bumps `@os-eco/burrow-cli` 0.3.3 → 0.3.4 to fix
+Google/Gemini provider env passthrough, and makes brainstorm/planner
+runtime configurable via `.warren/config.yaml`.
+
+### Changed
+
+- **`chore(burrow-cli)`** — bump `@os-eco/burrow-cli` 0.3.3 → 0.3.4
+  to pick up the Google/Gemini provider env passthrough fix.
+- **`feat(config)`** — brainstorm/planner runtime is now configurable
+  via `.warren/config.yaml` `interactiveAgents` block (warren-b802).
+
 ## [0.5.3] — 2026-05-23
 
 Patch release shipping cost analytics, a responsive mobile UI, and

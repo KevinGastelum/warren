@@ -72,6 +72,11 @@ and is surfaced by `loadWarrenConfig()`. Notable knobs:
   emit `question_posed`. Consumers fall back to
   `DEFAULT_AGENT_PAUSE_TIMEOUT_MS` when the block is absent. SPEC §11.O
   (warren-cd37 / pl-0344 step 2).
+- `plotSync` — per-project Plot sync to GitHub configuration.
+  `mergeStrategy` (`immediate` | `auto` | `manual`, default `manual`)
+  controls whether sync PRs are auto-merged; `targetBranch` overrides
+  the project's `defaultBranch` for the PR base. `POST /plots/:id/sync`
+  triggers manually; formalize and status-change fire background syncs.
 
 ## Relationship to burrow
 
