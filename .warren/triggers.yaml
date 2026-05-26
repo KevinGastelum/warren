@@ -5,8 +5,8 @@
 # implemented; the `kind:` discriminator leaves room for future
 # webhook-style triggers without a breaking schema rev.
 #
-# Required fields: id, kind, cron, seed, role.
-# Optional fields: timezone (default UTC), prompt.
+# Required fields: id, kind, cron, role.
+# Optional fields: seed, timezone (default UTC), prompt.
 #
 # Field rules (TriggersConfigSchema in src/warren-config/schema.ts):
 #   id        kebab/snake-case (lowercase, digits, dots, dashes, _). Unique.

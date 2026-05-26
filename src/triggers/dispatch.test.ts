@@ -263,6 +263,25 @@ describe("dispatchCronTrigger", () => {
 		});
 		expect(calls[0]?.prompt).toBe("Default cron body.");
 	});
+
+	test("seedless trigger uses generic fallback prompt and omits seed from metadata", async () => {
+		await repos.triggers.upsert({
+			projectId,
+			triggerId: TRIGGER_ID,
+			lastFiredAt: "2026-05-10T12:00:00.000Z",
+		});
+		const { spawn, calls } = spawnRecorder(repos, projectId);
+		await dispatchCronTrigger({
+			projectId,
+			trigger: cronTrigger({ seed: undefined }),
+			now: new Date("2026-05-11T00:05:00.000Z"),
+			repos,
+			spawn,
+		});
+		expect(calls[0]?.prompt).toBe("Run cron trigger nightly.");
+		const meta = calls[0]?.metadata as Record<string, unknown>;
+		expect(meta.seed).toBeUndefined();
+	});
 });
 
 describe("dispatchScheduledSeed", () => {

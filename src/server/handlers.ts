@@ -628,7 +628,11 @@ function runProjectTriggerHandler(deps: ServerDeps): RouteHandler {
 			projectId: project.id,
 			prompt,
 			trigger: "manual-trigger",
-			metadata: { triggerId: trigger.id, cron: trigger.cron, seed: trigger.seed },
+			metadata: {
+				triggerId: trigger.id,
+				cron: trigger.cron,
+				...(trigger.seed !== undefined ? { seed: trigger.seed } : {}),
+			},
 			...(deps.now !== undefined ? { now: deps.now } : {}),
 			projectsConfig: deps.projectsConfig,
 			projectSpawn: deps.spawn ?? defaultSpawn,

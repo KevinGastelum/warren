@@ -277,8 +277,12 @@ function TriggerRow({
 				</Button>
 			</div>
 			<dl className="mt-1.5 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs">
-				<dt className="text-(--color-muted-foreground)">seed</dt>
-				<dd className="font-mono">{trigger.seed}</dd>
+				{trigger.seed !== undefined ? (
+					<>
+						<dt className="text-(--color-muted-foreground)">seed</dt>
+						<dd className="font-mono">{trigger.seed}</dd>
+					</>
+				) : null}
 				<dt className="text-(--color-muted-foreground)">role</dt>
 				<dd className="font-mono">{trigger.role}</dd>
 				{trigger.prompt !== undefined ? (

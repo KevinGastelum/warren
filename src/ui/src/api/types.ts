@@ -407,7 +407,7 @@ export interface CronTrigger {
 	id: string;
 	kind: "cron";
 	cron: string;
-	seed: string;
+	seed?: string;
 	role: string;
 	timezone?: string;
 	prompt?: string;
@@ -476,7 +476,7 @@ export interface TriggerSummary {
 	id: string;
 	kind: "cron";
 	cron: string;
-	seed: string;
+	seed?: string;
 	role: string;
 	timezone?: string;
 	prompt?: string;

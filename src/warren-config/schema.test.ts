@@ -33,6 +33,15 @@ describe("TriggersConfigSchema", () => {
 		expect(parsed.success).toBe(true);
 	});
 
+	test("accepts a cron trigger without seed (seedless agent)", () => {
+		const { seed: _, ...seedless } = VALID_TRIGGER;
+		const parsed = TriggersConfigSchema.safeParse([seedless]);
+		expect(parsed.success).toBe(true);
+		if (parsed.success) {
+			expect(parsed.data[0]?.seed).toBeUndefined();
+		}
+	});
+
 	test("rejects unknown kinds (preserves room for future webhook triggers)", () => {
 		const parsed = TriggersConfigSchema.safeParse([{ ...VALID_TRIGGER, kind: "webhook" }]);
 		expect(parsed.success).toBe(false);

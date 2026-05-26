@@ -305,7 +305,7 @@ const CronTriggerSchema = z
 		id: TriggerIdSchema,
 		kind: z.literal("cron"),
 		cron: CronExpressionSchema,
-		seed: SeedRefSchema,
+		seed: SeedRefSchema.optional(),
 		role: RoleNameSchema,
 		timezone: TimezoneSchema.optional(),
 		prompt: PromptSchema.optional(),

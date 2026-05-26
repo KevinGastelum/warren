@@ -29,7 +29,7 @@ export interface TriggerSummary {
 	readonly id: string;
 	readonly kind: "cron";
 	readonly cron: string;
-	readonly seed: string;
+	readonly seed?: string;
 	readonly role: string;
 	readonly timezone?: string;
 	readonly prompt?: string;
@@ -79,7 +79,7 @@ async function summarize(
 		id: trigger.id,
 		kind: trigger.kind,
 		cron: trigger.cron,
-		seed: trigger.seed,
+		...(trigger.seed !== undefined ? { seed: trigger.seed } : {}),
 		role: trigger.role,
 		...(trigger.timezone !== undefined ? { timezone: trigger.timezone } : {}),
 		...(trigger.prompt !== undefined ? { prompt: trigger.prompt } : {}),

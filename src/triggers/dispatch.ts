@@ -137,7 +137,11 @@ export async function dispatchCronTrigger(input: DispatchCronInput): Promise<Dis
 			projectId: input.projectId,
 			prompt,
 			trigger: "cron",
-			metadata: { triggerId: input.trigger.id, cron: input.trigger.cron, seed: input.trigger.seed },
+			metadata: {
+				triggerId: input.trigger.id,
+				cron: input.trigger.cron,
+				...(input.trigger.seed !== undefined ? { seed: input.trigger.seed } : {}),
+			},
 		});
 		runId = spawned.runId;
 	} catch (err) {
@@ -245,7 +249,10 @@ export function resolveCronPrompt(
 	if (defaults?.defaultPrompt !== undefined && defaults.defaultPrompt.trim() !== "") {
 		return defaults.defaultPrompt;
 	}
-	return `Work on seed ${trigger.seed} (cron trigger ${trigger.id}).`;
+	if (trigger.seed !== undefined) {
+		return `Work on seed ${trigger.seed} (cron trigger ${trigger.id}).`;
+	}
+	return `Run cron trigger ${trigger.id}.`;
 }
 
 function resolveScheduledPrompt(
