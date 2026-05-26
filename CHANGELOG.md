@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.4] — 2026-05-25
+
+Patch release fixing auto_plan_run children dispatching before the
+parent run's PR merges — without this gate, children would start on
+stale seeds state. Also mirrors `.seeds/plans.jsonl` from the workspace
+into the project clone during reap so `stageSeedsForCommit` no longer
+overwrites agent-created plans.
+
+### Added
+
+- **`feat(plan-runs)`** — `parentRunId` column on plan-runs
+  (warren-d9a2). Auto-plan-runs now back-link to the run that created
+  them. The coordinator gates on the parent run's PR being merged (or
+  the parent being a no-op empty-push) before dispatching the first
+  child. New DB migration `0018_add_plan_run_parent_run_id.sql`
+  (SQLite + Postgres).
+
+- **`feat(runs)`** — `mirrorPlans` reap step (warren-d9a2). During
+  reap, `.seeds/plans.jsonl` is now mirrored from the burrow workspace
+  into the project clone (append-only by plan ID) before
+  `stageSeedsForCommit` runs. Emits `seeds.plan_mirrored` events per
+  new plan.
+
+### Fixed
+
+- **`fix(plan-runs)`** — auto_plan_run children no longer dispatch
+  before the parent run's PR merges (warren-d9a2). Previously children
+  would start immediately on the default branch which lacked the
+  parent's seeds state. The coordinator now waits for merge, handles
+  closed-unmerged (fails the plan-run), and treats deleted parent rows
+  as gate-passed for best-effort recovery.
+
+- **`fix(runs)`** — `stageSeedsForCommit` no longer overwrites
+  agent-created plans (warren-d9a2). The new `mirrorPlans` step copies
+  workspace plans into the project clone first, so the subsequent
+  project→workspace copy in `stageSeedsForCommit` preserves them.
+
 ## [0.6.3] — 2026-05-25
 
 Patch release fixing auto_plan_run agent name inheritance — triage
