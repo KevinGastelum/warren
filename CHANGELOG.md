@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.5] — 2026-05-25
+
+Patch release fixing auto_plan_run never firing when `mirrorPlans` is
+active — the v0.6.4 `mirrorPlans` step copied workspace plans into the
+project clone *before* the baseline snapshot, making the diff always
+empty. Bugwatch runs that created plans would reap with
+`autoPlanRunCreated: false` and no plan-runs would dispatch.
+
+### Fixed
+
+- **`fix(runs)`** — auto_plan_run baseline snapshot now runs before
+  `mirrorPlans` (ordering bug introduced in warren-d9a2). Previously
+  `mirrorPlans` appended workspace plans into the project clone first,
+  so the subsequent baseline read saw the same plan IDs as the workspace
+  — the diff found zero new plans and skipped dispatch. Regression test
+  exercises the full `mirrorPlans` + auto_plan_run path end-to-end.
+
 ## [0.6.4] — 2026-05-25
 
 Patch release fixing auto_plan_run children dispatching before the

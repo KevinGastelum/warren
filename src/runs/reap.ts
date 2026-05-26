@@ -521,6 +521,22 @@ export async function reapRun(input: ReapRunInput): Promise<ReapRunResult> {
 			await fail("seeds_close", err);
 		}
 
+		// warren-a32a: snapshot the project-clone baseline plans.jsonl BEFORE
+		// mirrorPlans so auto_plan_run can diff workspace vs baseline. Must
+		// happen here because mirrorPlans appends workspace plans into the
+		// project clone, which would make the baseline identical to the
+		// workspace and defeat the diff (warren-d9a2 ordering bug).
+		let baselinePlanIds: Set<string> | null = null;
+		if (project.hasSeeds && input.outcome === "succeeded" && hasAutoPlanRunFrontmatter(run)) {
+			try {
+				const baselineBody =
+					(await fs.readFile(join(project.localPath, ".seeds", "plans.jsonl"))) ?? "";
+				baselinePlanIds = parsePlanIds(baselineBody);
+			} catch {
+				// Non-fatal — detection failure degrades to no auto-dispatch.
+			}
+		}
+
 		// warren-d9a2: mirror plans.jsonl from workspace → project clone,
 		// same shape as mirrorSeeds above. Without this, stageSeedsForCommit
 		// copies the OLD project baseline plans.jsonl into the workspace,
@@ -580,18 +596,12 @@ export async function reapRun(input: ReapRunInput): Promise<ReapRunResult> {
 		// emit `reap_failed` step=`seeds_commit` and do not fail the run.
 
 		// warren-a32a: snapshot the workspace's plans.jsonl BEFORE
-		// stageSeedsForCommit (which copies project→workspace). Since
-		// warren-d9a2 added mirrorPlans, the project clone already has
-		// the agent's plans — but the snapshot is still needed to detect
-		// NEW plan IDs for auto_plan_run dispatch.
+		// stageSeedsForCommit (which copies project→workspace). Baseline
+		// was already captured above mirrorPlans.
 		let workspacePlanIds: Set<string> | null = null;
-		let baselinePlanIds: Set<string> | null = null;
 		let workspacePlansBody: string | null = null;
-		if (project.hasSeeds && input.outcome === "succeeded" && hasAutoPlanRunFrontmatter(run)) {
+		if (baselinePlanIds !== null) {
 			try {
-				const baselineBody =
-					(await fs.readFile(join(project.localPath, ".seeds", "plans.jsonl"))) ?? "";
-				baselinePlanIds = parsePlanIds(baselineBody);
 				workspacePlansBody =
 					(await fs.readFile(join(workspacePath, ".seeds", "plans.jsonl"))) ?? "";
 				workspacePlanIds = parsePlanIds(workspacePlansBody);
