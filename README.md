@@ -9,6 +9,8 @@ Spawn cloud agents at your GitHub repos. Watch them work live, steer them mid-ru
 [![CI](https://github.com/jayminwest/warren/actions/workflows/ci.yml/badge.svg)](https://github.com/jayminwest/warren/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
+[**Watch the demo**](https://youtu.be/daa7y8g9BkM)
+
 > A network of interconnected burrows. Agents that operate in isolation, self-manage, self-repair, and self-improve.
 
 Warren is a self-hostable control plane for ephemeral coding agents. Runs are short-lived and sandboxed: they complete a task, validate the changes, push a branch, and spin down. Point it at your repos, dispatch from a browser or CLI, watch the events stream live, and reap the result. **One container, one volume, one HTTP API, one UI.**
