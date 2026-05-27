@@ -444,6 +444,7 @@ export interface DefaultsConfig {
 	 * the interactive built-in agents (brainstorm / planner).
 	 */
 	interactiveAgents?: InteractiveAgentsConfig;
+	qualityGate?: string;
 }
 
 export interface WarrenConfigResponse {

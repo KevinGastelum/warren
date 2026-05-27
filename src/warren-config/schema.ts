@@ -368,6 +368,7 @@ export const DefaultsConfigSchema = z
 		interactiveAgents: InteractiveAgentsConfigSchema.optional(),
 		// warren-cd22: per-project configuration for plot sync to GitHub.
 		plotSync: PlotSyncConfigSchema.optional(),
+		qualityGate: z.string().min(1, "qualityGate must be non-empty if provided").optional(),
 	})
 	.strict();
 
