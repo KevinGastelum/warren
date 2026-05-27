@@ -7,6 +7,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.10] — 2026-05-26
+
+Patch release hardening the developer experience: unified quality gates,
+CI-enforced code-health checks, dev container support, and naming
+convention enforcement.
+
+### Added
+
+- **`feat(dx)`** — Unified `check:all` script runs the full quality gate
+  suite (`test`, `lint`, `typecheck`, `validate:agents-md`,
+  `check:file-sizes`, `check:debt-markers`, `check:deps`,
+  `check:bundle-size:build`, `gen:docs:check`) in one command.
+- **`feat(ci)`** — CI now runs `validate:agents-md`, `check:file-sizes`,
+  `check:debt-markers`, `check:duplicates` (jscpd), `check:deps` (knip),
+  and `check:bundle-size` alongside the existing test/lint/typecheck jobs.
+- **`feat(dx)`** — `check:deps` wraps [knip](https://knip.dev) in
+  `--dependencies` mode to flag unused / undeclared npm dependencies
+  across root and `src/ui` workspaces (warren-d109).
+- **`feat(dx)`** — `check:duplicates` wires jscpd for duplicate-code
+  detection with project-tuned thresholds (warren-c0c2).
+- **`feat(dx)`** — `check:debt-markers` scans for TODO/FIXME/HACK markers
+  not tracked in the allowlist (warren-9ce6).
+- **`feat(dx)`** — `check:file-sizes` enforces per-file line-count budgets
+  to flag overgrown modules (warren-7dc0).
+- **`feat(dx)`** — `check:bundle-size` tracks Vite build output against
+  per-chunk size budgets (warren-2cb2).
+- **`feat(dx)`** — `gen:docs` auto-generates API route table documentation
+  from handler source (warren-27a7).
+- **`feat(dx)`** — `validate:agents-md` validates AGENTS.md commands
+  still run (warren-b775).
+- **`feat(dx)`** — `.devcontainer/devcontainer.json` for Bun-based
+  Codespaces / Dev Container support (warren-1daa).
+- **`feat(dx)`** — Dependabot configuration with dependency-update delay
+  cooldown (warren-e54e).
+- **`docs`** — `AGENTS.md` added at repo root mirroring CLAUDE.md
+  essentials for non-Claude agents (warren-14a6).
+- **`docs`** — `docs/http-api.md` generated API route documentation.
+
+### Changed
+
+- **`refactor(lint)`** — Biome complexity rules enabled project-wide:
+  `noExcessiveLinesPerFunction` (500-line cap) and
+  `noExcessiveCognitiveComplexity` (threshold 15), with overrides for
+  existing large files (warren-e830).
+- **`refactor(lint)`** — `useFilenamingConvention` enforces kebab-case
+  filenames; `burrow_config.ts` renamed to `burrow-config.ts`
+  (warren-a5b3).
+- **`chore`** — Removed unused `chalk` and `pino-pretty` dependencies.
+- **`chore`** — `.gitignore` extended to cover `.idea/` and `.vscode/`
+  IDE directories.
+
+### Fixed
+
+- **`fix(test)`** — Six `launchPreview` tests updated with missing
+  `tcpConnect` inject after the warren-44ed TCP-handshake refactor.
+
+### Docs
+
+- **`docs(claude)`** — CLAUDE.md updated: quality gates section now
+  references `check:all` and documents `check:deps` / knip workflow.
+
 ## [0.6.9] — 2026-05-26
 
 Patch release making the Plot "Run plan" dialog's agent prompt editable
