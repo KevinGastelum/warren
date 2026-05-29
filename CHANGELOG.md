@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.4] — 2026-05-29
+
+Release-train batch (pl-369d / warren-8104): notable Medium fixes and
+small quality wins that merged after 0.7.2 and rode into the 0.7.3 tag
+without their own CHANGELOG section. Documented here as a retroactive
+patch release so the history is complete.
+
+### Added
+
+- **`runs`** — re-run a terminated run as a continuation: re-dispatch
+  against the same workspace branch to continue the same conversation
+  (warren-4b11, #206).
+
+### Changed
+
+- **`runs`** — harden against empty pushes: detect and fail runs that
+  drop all commits instead of silently pushing nothing (warren-72b9,
+  #205).
+- **`server(plots)`** — split `src/server/handlers/plots.ts` into
+  per-domain handler modules (detail / transitions / comments / events /
+  membership / sync-status) plus per-domain test files, reducing
+  `plots/index.ts` under the 500-line budget (warren-332b, #213).
+- **`dx(ci)`** — ratchet coverage floors up to current levels to unblock
+  the pre-commit hook (warren-f65e, #208) and ratchet bundle-size
+  budgets back down after pl-55a3 closed (warren-bfc6, #209).
+- **`tests(runs)`** — cover `isPiAgentEnd` + result/guard branches in
+  terminal-detect (warren-88da, #211).
+- **`docs`** — fix stale `src/server/main.ts` path references in
+  comments and docs (warren-e577, #212).
+
+### Fixed
+
+- **`ui(runs)`** — surface a stalled / unreachable burrow stream in the
+  UI instead of showing no indication (warren-6376, #207).
+- **`reap`** — pass `--no-verify` on warren bookkeeping commits so the
+  repo pre-commit `check:all` gauntlet no longer blocks `seeds_commit`
+  (warren-27d3, #210).
+
 ## [0.7.3] — 2026-05-29
 
 Run Analytics dashboard (pl-ad0f / warren-a00a): context-usage and
