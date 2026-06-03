@@ -50,6 +50,13 @@ services:
       # pointing CANOPY_REPO_URL at file:///canopy-source for local dev.
       # Defaults to /dev/null so the mount is harmless when unset.
       - ${CANOPY_SOURCE_DIR:-/dev/null}:/canopy-source:ro
+      # Claude subscription credentials for burrow's claude-code runtime to
+      # forward into sandboxes. burrow's forwardClaudeHostCredentials reads
+      # ~/.claude/.credentials.json (linux); the in-container ~/.claude is
+      # otherwise empty, so OAuth auth is "dead by construction" (warren-5165)
+      # and dispatched claude-code runs 401 with apiKeySource:"none". Read-only;
+      # the host's logged-in Claude Code keeps this file refreshed.
+      - C:/Users/Ivonne/.claude/.credentials.json:/root/.claude/.credentials.json:ro
 
 volumes:
   warren_data:
