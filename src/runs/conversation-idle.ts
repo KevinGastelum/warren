@@ -73,6 +73,36 @@ export interface IdleConversationReader {
 	read(): Promise<readonly IdleConversationCandidate[]>;
 }
 
+/**
+ * Production `IdleConversationReader`: snapshots `active` conversations
+ * (warren-0b91) and keeps those whose anchoring run is still `running`.
+ * Mirrors how `defaultPlotEventReader` co-locates with `pause.ts` — the boot
+ * wiring (src/server/main/detector-wiring.ts) hands this to
+ * `bootConversationIdleDetector` so the tick itself stays seam-driven.
+ */
+export function createRepoIdleConversationReader(
+	repos: Pick<Repos, "conversations" | "runs">,
+): IdleConversationReader {
+	return {
+		async read() {
+			const active = await repos.conversations.listAll("active");
+			const candidates: IdleConversationCandidate[] = [];
+			for (const conversation of active) {
+				if (conversation.anchoringRunId === null) continue;
+				const run = await repos.runs.get(conversation.anchoringRunId);
+				if (run === null || run.state !== "running") continue;
+				candidates.push({
+					conversationId: conversation.id,
+					runId: conversation.anchoringRunId,
+					projectId: conversation.projectId,
+					lastActivityAt: conversation.lastActivityAt,
+				});
+			}
+			return candidates;
+		},
+	};
+}
+
 export interface ConversationIdleTickLogger {
 	info(obj: Record<string, unknown>, msg?: string): void;
 	warn(obj: Record<string, unknown>, msg?: string): void;

@@ -72,6 +72,12 @@ and is surfaced by `loadWarrenConfig()`. Notable knobs:
   emit `question_posed`. Consumers fall back to
   `DEFAULT_AGENT_PAUSE_TIMEOUT_MS` when the block is absent. SPEC §11.O
   (warren-cd37 / pl-0344 step 2).
+- `conversation.idleTimeoutMs` (default `1200000` = 20 min, bounds
+  1s..24h) — inactivity budget after which the on-by-default idle
+  coordinator (`src/runs/conversation-idle.ts`, booted in
+  `detector-wiring.ts`; opt-out `WARREN_CONVERSATION_IDLE_DISABLED=1`)
+  finalizes a conversation's anchoring run. The conversation stays
+  `active`; transcript and Plot persist (warren-005d, LEVERET.md §0.4).
 - `plotSync` — per-project Plot sync to GitHub configuration.
   `mergeStrategy` (`immediate` | `auto` | `manual`, default `manual`)
   controls whether sync PRs are auto-merged; `targetBranch` overrides

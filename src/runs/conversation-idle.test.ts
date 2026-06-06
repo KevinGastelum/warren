@@ -26,6 +26,7 @@ import {
 import {
 	bootConversationIdleDetector,
 	CONVERSATION_IDLE_FINALIZED_KIND,
+	createRepoIdleConversationReader,
 	type IdleConversationCandidate,
 	type IdleConversationReader,
 	tickConversationIdleDetector,
@@ -278,5 +279,98 @@ describe("bootConversationIdleDetector", () => {
 	test("config cache integration compiles against the empty-defaults shape", () => {
 		// Sanity: emptyDefaults yields a budget-less config the resolver tolerates.
 		expect(emptyDefaults().defaults?.conversation).toBeUndefined();
+	});
+});
+
+describe("createRepoIdleConversationReader", () => {
+	let db: WarrenDb;
+	let repos: Repos;
+
+	beforeEach(async () => {
+		db = await openDatabase({ path: ":memory:" });
+		repos = createRepos(db);
+		await repos.agents.upsert({ name: "claude-code", renderedJson: makeAgentJson() });
+		await repos.projects.create({
+			id: PROJECT_ID,
+			gitUrl: "https://github.com/x/y.git",
+			localPath: "/data/projects/x/y",
+			defaultBranch: "main",
+		});
+	});
+
+	afterEach(async () => {
+		await db.close();
+	});
+
+	async function seedConversationRun(): Promise<string> {
+		const row = await repos.runs.create({
+			agentName: "claude-code",
+			projectId: PROJECT_ID,
+			prompt: "<conversation>",
+			renderedAgentJson: makeAgentJson(),
+			trigger: "manual",
+			mode: "conversation",
+		});
+		await repos.runs.markRunning(row.id);
+		return row.id;
+	}
+
+	test("yields an active conversation whose anchoring run is running", async () => {
+		const runId = await seedConversationRun();
+		const conversation = await repos.conversations.create({
+			projectId: PROJECT_ID,
+			anchoringRunId: runId,
+			now: NOW,
+		});
+		const reader = createRepoIdleConversationReader(repos);
+		const candidates = await reader.read();
+		expect(candidates).toEqual([
+			{
+				conversationId: conversation.id,
+				runId,
+				projectId: PROJECT_ID,
+				lastActivityAt: NOW.toISOString(),
+			},
+		]);
+	});
+
+	test("excludes closed conversations, null anchors, terminal and missing runs", async () => {
+		// Closed conversation with a running run.
+		const closedRun = await seedConversationRun();
+		const closed = await repos.conversations.create({
+			projectId: PROJECT_ID,
+			anchoringRunId: closedRun,
+		});
+		await repos.conversations.close(closed.id);
+		// Active conversation that has no anchoring run yet.
+		await repos.conversations.create({ projectId: PROJECT_ID });
+		// Active conversation whose anchoring run already finalized.
+		const doneRun = await seedConversationRun();
+		await repos.runs.finalize(doneRun, "succeeded");
+		await repos.conversations.create({ projectId: PROJECT_ID, anchoringRunId: doneRun });
+		// Active conversation whose anchoring run row is gone.
+		await repos.conversations.create({ projectId: PROJECT_ID, anchoringRunId: "run_missing" });
+
+		const reader = createRepoIdleConversationReader(repos);
+		expect(await reader.read()).toEqual([]);
+	});
+
+	test("feeds the tick end-to-end: repo-read candidate idle-finalizes", async () => {
+		const runId = await seedConversationRun();
+		const idleSince = new Date(NOW.getTime() - DEFAULT_CONVERSATION_IDLE_TIMEOUT_MS - 1);
+		const conversation = await repos.conversations.create({
+			projectId: PROJECT_ID,
+			anchoringRunId: runId,
+			now: idleSince,
+		});
+		const result = await tickConversationIdleDetector({
+			repos,
+			reader: createRepoIdleConversationReader(repos),
+			now: () => NOW,
+		});
+		expect(result.finalized).toEqual([{ conversationId: conversation.id, runId }]);
+		expect((await repos.runs.require(runId)).state).toBe("succeeded");
+		// The conversation itself stays active — idle-finalize reclaims compute only.
+		expect((await repos.conversations.require(conversation.id)).status).toBe("active");
 	});
 });

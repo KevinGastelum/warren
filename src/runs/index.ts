@@ -53,6 +53,18 @@ export {
 export { type ParsedBurrowConfig, parseBurrowConfig } from "./burrow-config.ts";
 export { type CancelRunInput, type CancelRunResult, cancelRun } from "./cancel.ts";
 export {
+	type BootConversationIdleDetectorInput,
+	bootConversationIdleDetector,
+	CONVERSATION_IDLE_FINALIZED_KIND,
+	type ConversationIdleDetectorHandle,
+	type ConversationIdleTickDeps,
+	type ConversationIdleTickResult,
+	createRepoIdleConversationReader,
+	type IdleConversationCandidate,
+	type IdleConversationReader,
+	tickConversationIdleDetector,
+} from "./conversation-idle.ts";
+export {
 	type CreateMergePollerDispatchInput,
 	createMergePollerDispatch,
 } from "./conversation-merge-dispatch.ts";

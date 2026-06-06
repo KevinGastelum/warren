@@ -13,6 +13,13 @@
  *   timeout through reap so the burrow workspace + bwrap process tree is
  *   torn down. Opt-in: arms only on a positive timeout. See
  *   `src/runs/watchdog.ts`.
+ * - `bootConversationIdleDetectorFromEnv` (warren-005d / LEVERET.md §0.4):
+ *   finalizes the anchoring `mode:"conversation"` run after
+ *   `conversation.idleTimeoutMs` of inactivity (the conversation row stays
+ *   `active`; transcript and Plot persist). On by default — it is the only
+ *   thing that reclaims an abandoned conversation's compute, since
+ *   warren-c770 exempts conversation runs from the watchdog and crash
+ *   recovery. Opt-out via `WARREN_CONVERSATION_IDLE_DISABLED=1`.
  */
 
 import type { BurrowClientPool } from "../../burrow-client/pool.ts";
@@ -22,10 +29,13 @@ import type { SpawnFn } from "../../projects/clone.ts";
 import type { ProjectsConfig } from "../../projects/config.ts";
 import {
 	type AutoOpenPrConfig,
+	bootConversationIdleDetector,
 	bootConversationMergePoller,
 	bootPauseDetector,
 	bootWatchdog,
+	type ConversationIdleDetectorHandle,
 	createMergePollerDispatch,
+	createRepoIdleConversationReader,
 	defaultPlotEventReader,
 	loadWatchdogConfigFromEnv,
 	type MergePollerHandle,
@@ -132,6 +142,48 @@ export function bootConversationMergePollerFromEnv(
 	return handle;
 }
 
+export interface ConversationIdleWiringInput {
+	readonly env: EnvLike;
+	readonly repos: Repos;
+	readonly warrenConfigs: WarrenConfigCache;
+	readonly logger: Logger;
+	readonly now?: () => Date;
+}
+
+/**
+ * Boot the conversation idle-timeout coordinator (warren-005d /
+ * LEVERET.md §0.4 / §0.14). On by default — unlike the opt-in detectors
+ * above, this is the lifecycle reclaim path for conversation compute
+ * (mirroring preview eviction / workspace GC), so it must not depend on an
+ * operator remembering a flag. Opt-out via
+ * `WARREN_CONVERSATION_IDLE_DISABLED=1`; ticks every
+ * `WARREN_CONVERSATION_IDLE_TICK_MS` (default 60s). The per-conversation
+ * budget comes from each project's `conversation.idleTimeoutMs`
+ * (`.warren/config.yaml`), falling back to the 20-minute default.
+ */
+export function bootConversationIdleDetectorFromEnv(
+	input: ConversationIdleWiringInput,
+): ConversationIdleDetectorHandle {
+	const { env, logger } = input;
+	const disabled = parseTrueEnv(env.WARREN_CONVERSATION_IDLE_DISABLED);
+	const tickMs = parseIntEnv(env, "WARREN_CONVERSATION_IDLE_TICK_MS", 60_000);
+	const handle = bootConversationIdleDetector({
+		repos: input.repos,
+		reader: createRepoIdleConversationReader(input.repos),
+		warrenConfigs: input.warrenConfigs,
+		tickMs,
+		disabled,
+		logger: pauseLoggerFromPino(logger),
+		...(input.now !== undefined ? { now: input.now } : {}),
+	});
+	if (disabled) {
+		logger.info({}, "conversation idle detector disabled via WARREN_CONVERSATION_IDLE_DISABLED");
+	} else {
+		logger.info({ tickMs }, "conversation idle detector running");
+	}
+	return handle;
+}
+
 export interface WatchdogWiringInput {
 	readonly env: EnvLike;
 	readonly repos: Repos;
@@ -192,13 +244,14 @@ export interface BackgroundDetectorHandles {
 	readonly pauseDetector: PauseDetectorHandle;
 	readonly watchdog: WatchdogHandle;
 	readonly mergePoller: MergePollerHandle;
+	readonly conversationIdleDetector: ConversationIdleDetectorHandle;
 }
 
 /**
- * Boot all three opt-in background detectors in one call. Each is independently
- * gated by its own env flag inside the per-detector boot; this wrapper just
- * collapses the shared dep-plumbing so `bootServer` stays under the file-size
- * ratchet.
+ * Boot all four background detectors in one call. Each is independently
+ * gated by its own env flag inside the per-detector boot (the conversation
+ * idle detector is the only on-by-default one); this wrapper just collapses
+ * the shared dep-plumbing so `bootServer` stays under the file-size ratchet.
  */
 export function bootBackgroundDetectors(
 	input: BackgroundDetectorWiringInput,
@@ -236,5 +289,12 @@ export function bootBackgroundDetectors(
 		logger: input.logger,
 		...now,
 	});
-	return { pauseDetector, watchdog, mergePoller };
+	const conversationIdleDetector = bootConversationIdleDetectorFromEnv({
+		env: input.env,
+		repos: input.repos,
+		warrenConfigs: input.warrenConfigs,
+		logger: input.logger,
+		...now,
+	});
+	return { pauseDetector, watchdog, mergePoller, conversationIdleDetector };
 }
