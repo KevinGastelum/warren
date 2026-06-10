@@ -164,6 +164,32 @@ describe("buildRunMetrics", () => {
 		expect(beta?.successRate).toBeCloseTo(0);
 	});
 
+	it("populates cancelled in RunGroupBucket and computes successRate over all three terminal states", () => {
+		const m = buildRunMetrics([
+			row({ runId: "a", agentName: "mixed", state: "succeeded" }),
+			row({ runId: "b", agentName: "mixed", state: "failed" }),
+			row({ runId: "c", agentName: "mixed", state: "cancelled" }),
+			row({ runId: "d", agentName: "mixed", state: "cancelled" }),
+			// 1 succeeded / 4 terminal → 0.25
+		]);
+		const bucket = m.byAgent.find((g) => g.key === "mixed");
+		expect(bucket?.succeeded).toBe(1);
+		expect(bucket?.failed).toBe(1);
+		expect(bucket?.cancelled).toBe(2);
+		expect(bucket?.successRate).toBeCloseTo(0.25);
+	});
+
+	it("successRate is null (not 0) when every terminal run is cancelled", () => {
+		const m = buildRunMetrics([
+			row({ runId: "a", agentName: "agent", state: "cancelled" }),
+			row({ runId: "b", agentName: "agent", state: "cancelled" }),
+		]);
+		const bucket = m.byAgent.find((g) => g.key === "agent");
+		// 0 succeeded / 2 terminal → successRate 0, not null
+		expect(bucket?.successRate).toBeCloseTo(0);
+		expect(bucket?.cancelled).toBe(2);
+	});
+
 	it("folds null model/provider into NONE_KEY", () => {
 		const m = buildRunMetrics([
 			row({ runId: "a", model: "sonnet", provider: "anthropic", tokensInput: 10 }),

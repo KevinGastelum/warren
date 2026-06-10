@@ -183,6 +183,30 @@ export class EventsRepo {
 		);
 	}
 
+	/**
+	 * Count `steer.sent` events per run for the analytics steering-signal
+	 * tally (warren-92ad). Returns only runs that received at least one
+	 * steering message. Empty `runIds` short-circuits without a DB hit.
+	 */
+	async countSteerEventsByRuns(runIds: readonly string[]): Promise<Map<string, number>> {
+		if (runIds.length === 0) return new Map();
+		const rows = await this.adapter.pickAll<{ runId: string; n: number }>(
+			this.db
+				.select({
+					runId: this.events.runId,
+					n: sql<number>`count(*)`,
+				})
+				.from(this.events)
+				.where(
+					and(inArray(this.events.runId, runIds as string[]), eq(this.events.kind, "steer.sent")),
+				)
+				.groupBy(this.events.runId),
+		);
+		const out = new Map<string, number>();
+		for (const r of rows) out.set(r.runId, Number(r.n));
+		return out;
+	}
+
 	async countByRun(runId: string): Promise<number> {
 		const row = await this.adapter.pickOne<{ n: number | string }>(
 			this.db

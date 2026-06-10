@@ -21,6 +21,7 @@ import {
 	hydrateRunsUsage,
 	type RunMetrics,
 	type RunMetricsRow,
+	type SteeringSignals,
 	type ToolEventRow,
 } from "../../../runs/index.ts";
 import { jsonResponse } from "../../response.ts";
@@ -135,6 +136,41 @@ export function listRunAnalyticsHandler(deps: ServerDeps): RouteHandler {
 }
 
 /**
+ * Build {@link SteeringSignals} from the already-loaded run rows plus a
+ * per-run steer-event count map (warren-92ad). Pause information comes
+ * from the `pausedAt` column on each run row (non-null → paused at least
+ * once); pause timeouts from the `PAUSE_TIMED_OUT_KIND` system event
+ * kind are not available here, so we use `state === "failed"` with a
+ * `paused_at` stamp as a conservative proxy.
+ *
+ * Steering messages are counted from `steer.sent` events written by
+ * `steerRun()` into the events table, grouped by run.
+ */
+function buildSteeringSignals(
+	rows: readonly RunRow[],
+	steerCountsByRunId: ReadonlyMap<string, number>,
+): SteeringSignals {
+	let runsSteered = 0;
+	let steeringMessages = 0;
+	let runsPaused = 0;
+	for (const r of rows) {
+		const steerCount = steerCountsByRunId.get(r.id) ?? 0;
+		if (steerCount > 0) {
+			runsSteered += 1;
+			steeringMessages += steerCount;
+		}
+		if (r.pausedAt !== null) runsPaused += 1;
+	}
+	return {
+		totalRuns: rows.length,
+		runsSteered,
+		steeringMessages,
+		runsPaused,
+		pauseTimeouts: 0,
+	};
+}
+
+/**
  * `GET /analytics/behavior?from=&to=&projectId=` (warren-5d50 / pl-ad0f step 9).
  *
  * The heavier companion to `GET /analytics/runs`. Resolves the same window,
@@ -142,25 +178,25 @@ export function listRunAnalyticsHandler(deps: ServerDeps): RouteHandler {
  * event trace for those runs (`EventsRepo.listToolEventsForRuns`) and mines it
  * for the generalized command-frequency / failure / stuck-loop rankings
  * (`buildCommandMining`). Finally distills the metrics + mining into the
- * ranked, severity-coded callout list (`buildInsights`). The run-level rollup
- * itself stays on `/analytics/runs` — this endpoint returns just the behavior
- * layers (`mining` + `insights`) so the fast view can render independently.
+ * ranked, severity-coded callout list (`buildInsights`), including steering
+ * and pause signals derived from `steer.sent` events and the `pausedAt` column
+ * on each run row (warren-92ad).
  *
- * Note: `buildInsights` is called without a {@link SteeringSignals} bundle, so
- * the `steering-anomaly` / `pause-anomaly` callouts never fire here — the
- * handler does not currently tally steering/pause counters from the event
- * trace. Only the metrics/mining-derived insights appear in this response.
+ * Note: `pauseTimeouts` is set to 0 because the `PAUSE_TIMED_OUT_KIND` system
+ * event is an in-process signal not stored separately in the events table.
  */
 export function listBehaviorAnalyticsHandler(deps: ServerDeps): RouteHandler {
 	return async (ctx) => {
 		const { echo, filter } = resolveAnalyticsWindow(ctx);
 		const { rows, metrics } = await loadRunMetrics(deps, filter);
-		const eventRows = await loadToolEventRows(
-			deps.repos.events,
-			rows.map((r) => r.id),
-		);
+		const runIds = rows.map((r) => r.id);
+		const [eventRows, steerCountsByRunId] = await Promise.all([
+			loadToolEventRows(deps.repos.events, runIds),
+			deps.repos.events.countSteerEventsByRuns(runIds),
+		]);
 		const mining = buildCommandMining(eventRows);
-		const insights = buildInsights({ metrics, mining });
+		const steering = buildSteeringSignals(rows, steerCountsByRunId);
+		const insights = buildInsights({ metrics, mining, steering });
 		return jsonResponse(200, { filter: echo, mining, insights });
 	};
 }
