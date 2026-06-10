@@ -35,6 +35,11 @@
  * this into WarrenServerHandle.stop (R-06 step 4).
  */
 
+import {
+	type CiFixerTickDeps,
+	type RunCiFixerTickResult,
+	runCiFixerTick,
+} from "../ci-fixer/poller.ts";
 import type { Repos } from "../db/repos/index.ts";
 import type { ProjectRow } from "../db/schema.ts";
 import type { ScheduledSeed, WarrenExtensions } from "../seeds-cli/index.ts";
@@ -84,11 +89,16 @@ export interface TickDeps {
 	readonly spawn: DispatchSpawnFn;
 	readonly now?: () => Date;
 	readonly logger?: TickLogger;
+	/** Optional CI-fixer tick deps (warren-0b75). When omitted the CI-fixer
+	 * pass is skipped entirely (backwards-compatible with existing boot paths
+	 * that don't wire a GITHUB_TOKEN or spawnFixer). */
+	readonly ciFixer?: CiFixerTickDeps;
 }
 
 export interface RunTickResult {
 	readonly cron: readonly DispatchCronResult[];
 	readonly scheduled: readonly DispatchScheduledResult[];
+	readonly ciFixerResults: readonly RunCiFixerTickResult[];
 	readonly projectErrors: readonly { projectId: string; reason: string }[];
 }
 
@@ -101,6 +111,7 @@ export async function runTick(deps: TickDeps): Promise<RunTickResult> {
 	const now = deps.now?.() ?? new Date();
 	const cron: DispatchCronResult[] = [];
 	const scheduled: DispatchScheduledResult[] = [];
+	const ciFixerResults: RunCiFixerTickResult[] = [];
 	const projectErrors: { projectId: string; reason: string }[] = [];
 
 	for (const project of await deps.repos.projects.listAll()) {
@@ -111,6 +122,7 @@ export async function runTick(deps: TickDeps): Promise<RunTickResult> {
 				now,
 				cron,
 				scheduled,
+				ciFixerResults,
 			});
 		} catch (err) {
 			// pl-2f15 risk #9: project delete races with the tick can leave
@@ -122,7 +134,7 @@ export async function runTick(deps: TickDeps): Promise<RunTickResult> {
 		}
 	}
 
-	return { cron, scheduled, projectErrors };
+	return { cron, scheduled, ciFixerResults, projectErrors };
 }
 
 interface RunProjectTickInput {
@@ -131,10 +143,11 @@ interface RunProjectTickInput {
 	readonly now: Date;
 	readonly cron: DispatchCronResult[];
 	readonly scheduled: DispatchScheduledResult[];
+	readonly ciFixerResults: RunCiFixerTickResult[];
 }
 
 async function runProjectTick(input: RunProjectTickInput): Promise<void> {
-	const { deps, project, now, cron, scheduled } = input;
+	const { deps, project, now, cron, scheduled, ciFixerResults } = input;
 	const nowIso = now.toISOString();
 	const config = await deps.loadWarrenConfig(project.id, project.localPath);
 
@@ -216,6 +229,35 @@ async function runProjectTick(input: RunProjectTickInput): Promise<void> {
 				await recordClearFailure(deps, result.runId, result.seedId, formatError(err));
 			}
 		}
+	}
+
+	await maybeCiFixerPass({ deps, project, config, now, ciFixerResults });
+}
+
+/**
+ * CI-fixer pass for a single project (warren-0b75). Extracted to keep
+ * `runProjectTick` within biome's complexity ceiling. Non-fatal: failures
+ * warn and return without disturbing the cron/scheduled results.
+ */
+async function maybeCiFixerPass(input: {
+	readonly deps: TickDeps;
+	readonly project: ProjectRow;
+	readonly config: LoadedWarrenConfig;
+	readonly now: Date;
+	readonly ciFixerResults: RunCiFixerTickResult[];
+}): Promise<void> {
+	const { deps, project, config, now, ciFixerResults } = input;
+	if (deps.ciFixer === undefined) return;
+	try {
+		const ciResult = await runCiFixerTick({ project, config, deps: deps.ciFixer, now });
+		if (ciResult.dispatched > 0 || ciResult.errors > 0) {
+			ciFixerResults.push(ciResult);
+		}
+	} catch (err) {
+		deps.logger?.warn(
+			{ projectId: project.id, reason: formatError(err) },
+			"scheduler.ci_fixer_failed",
+		);
 	}
 }
 
