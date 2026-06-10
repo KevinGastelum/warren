@@ -113,12 +113,21 @@ describe("categorize", () => {
 
 	test("buckets colon-namespaced scripts by their matching segment", () => {
 		expect(categorize(generalizeCommand("bun run test:unit") ?? "")).toBe("test");
+		expect(categorize(generalizeCommand("bun run test:watch") ?? "")).toBe("test");
+		expect(categorize(generalizeCommand("bun run build:prod") ?? "")).toBe("build");
 		expect(categorize(generalizeCommand("bun run build:ui") ?? "")).toBe("build");
 		// Direct (already-generalized) colon scripts also bucket by segment.
 		expect(categorize("bun run lint:test")).toBe("test");
 		// Non-matching colon scripts still fall through to `other`.
 		expect(categorize(generalizeCommand("bun run latest:tag") ?? "")).toBe("other");
 		expect(categorize(generalizeCommand("bun run prebuild:assets") ?? "")).toBe("other");
+	});
+
+	test("does not mis-classify scripts where category keyword appears as substring", () => {
+		// 'latestbuild' contains 'test' as substring but must not match the test category.
+		expect(categorize(generalizeCommand("bun run latestbuild") ?? "")).toBe("other");
+		expect(categorize(generalizeCommand("bun run rebuild") ?? "")).toBe("other");
+		expect(categorize(generalizeCommand("bun run latest") ?? "")).toBe("other");
 	});
 });
 
