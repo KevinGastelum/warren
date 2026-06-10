@@ -585,6 +585,51 @@ export class RunsRepo {
 	}
 
 	/**
+	 * Count and find the most-recent fixer run dispatched for a given
+	 * original run (warren-0b75). Used by the CI-fixer poller to enforce
+	 * `maxRetries` and the `cooldownMinutes` gate: count = how many fixer
+	 * dispatches have already fired; `lastEndedAt` = when the most recent
+	 * fixer run finished (for the cooldown check).
+	 */
+	async countFixerRunsForParent(
+		parentRunId: string,
+		agentName: string,
+	): Promise<{ count: number; lastEndedAt: string | null }> {
+		const rows = await this.adapter.pickAll(
+			this.db
+				.select()
+				.from(this.runs)
+				.where(and(eq(this.runs.parentRunId, parentRunId), eq(this.runs.agentName, agentName)))
+				.orderBy(desc(this.runs.endedAt), asc(this.runs.id)),
+		);
+		return {
+			count: rows.length,
+			lastEndedAt: rows[0]?.endedAt ?? null,
+		};
+	}
+
+	/**
+	 * List `succeeded` runs with a non-null `prUrl` for a given project
+	 * (warren-0b75). Used by the CI-fixer poller to find PRs that may need
+	 * a fix dispatch. Hits the `runs_pr_url_idx` index.
+	 */
+	async listSucceededWithPrUrl(projectId: string): Promise<RunRow[]> {
+		return this.adapter.pickAll(
+			this.db
+				.select()
+				.from(this.runs)
+				.where(
+					and(
+						eq(this.runs.projectId, projectId),
+						eq(this.runs.state, "succeeded"),
+						isNotNull(this.runs.prUrl),
+					),
+				)
+				.orderBy(desc(this.runs.endedAt), asc(this.runs.id)),
+		);
+	}
+
+	/**
 	 * Atomic queued → running transition. Returns the claimed row, or null
 	 * if the row no longer exists or is no longer in `queued`. Used to keep
 	 * the warren-side state in sync with burrow's "the run loop just picked

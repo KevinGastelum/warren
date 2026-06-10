@@ -92,6 +92,90 @@ function isInCooldown(lastAttemptAt: string | null, cooldownMinutes: number, now
 	return elapsedMs < cooldownMinutes * MS_PER_MINUTE;
 }
 
+/* ----------------------------------------------------------------------- */
+/* CI log extraction (warren-a993)                                          */
+/* ----------------------------------------------------------------------- */
+
+const GITHUB_API_BASE = "https://api.github.com";
+const USER_AGENT = "warren-ci-fixer";
+
+function buildHeaders(token: string): Record<string, string> {
+	return {
+		accept: "application/vnd.github+json",
+		authorization: `Bearer ${token}`,
+		"user-agent": USER_AGENT,
+		"x-github-api-version": "2022-11-28",
+	};
+}
+
+export interface FetchJobLogInput {
+	readonly owner: string;
+	readonly repo: string;
+	readonly jobId: number;
+	readonly token: string;
+	readonly logTailLines: number;
+	readonly fetch?: typeof fetch;
+}
+
+export type FetchJobLogResult =
+	| { readonly kind: "ok"; readonly logTail: string }
+	| { readonly kind: "missing_token"; readonly message: string }
+	| { readonly kind: "http_error"; readonly status: number; readonly message: string };
+
+/**
+ * Fetch the GitHub Actions job log for a failing check-run and truncate to
+ * the last `logTailLines` lines. GitHub redirects to a signed S3 URL —
+ * follow the redirect to get the raw log text.
+ */
+export async function fetchJobLog(input: FetchJobLogInput): Promise<FetchJobLogResult> {
+	if (input.token === "") {
+		return { kind: "missing_token", message: "GITHUB_TOKEN unset; cannot fetch job log" };
+	}
+	const fetchImpl = input.fetch ?? globalThis.fetch;
+	const url = `${GITHUB_API_BASE}/repos/${input.owner}/${input.repo}/actions/jobs/${input.jobId}/logs`;
+
+	let res: Response;
+	try {
+		res = await fetchImpl(url, { method: "GET", headers: buildHeaders(input.token) });
+	} catch (err) {
+		return {
+			kind: "http_error",
+			status: 0,
+			message: err instanceof Error ? err.message : String(err),
+		};
+	}
+
+	if (!res.ok) {
+		const text = await safeReadText(res);
+		return {
+			kind: "http_error",
+			status: res.status,
+			message: `GET /actions/jobs/${input.jobId}/logs returned ${res.status}: ${truncate(text, 300)}`,
+		};
+	}
+
+	const raw = await safeReadText(res);
+	const tail = tailLines(raw, input.logTailLines);
+	return { kind: "ok", logTail: tail };
+}
+
+function tailLines(text: string, n: number): string {
+	const lines = text.split("\n");
+	return lines.slice(Math.max(0, lines.length - n)).join("\n");
+}
+
+async function safeReadText(res: Response): Promise<string> {
+	try {
+		return await res.text();
+	} catch {
+		return "";
+	}
+}
+
+function truncate(input: string, max: number): string {
+	return input.length <= max ? input : `${input.slice(0, max)}…`;
+}
+
 /**
  * Build the dispatch prompt for a `pr-fixer` run. The poller calls this
  * once `decideDispatch` returns `dispatch`. The CI failure context (check

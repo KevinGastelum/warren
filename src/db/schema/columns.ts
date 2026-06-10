@@ -243,6 +243,10 @@ export const INDEX_NAMES = {
 	eventsRunTs: "events_run_ts_idx",
 	triggersProject: "triggers_project_idx",
 	burrowsWorker: "burrows_worker_idx",
+	// warren-0b75: CI-fixer poller scans terminal runs with a non-null prUrl.
+	// Index covers the `WHERE pr_url IS NOT NULL AND state = 'succeeded'`
+	// predicate the poller fires each tick — without it the scan is full-table.
+	runsPrUrl: "runs_pr_url_idx",
 	// R-03 step 1 (pl-fef5, warren-094a): agents are addressed by (name,
 	// project_id). The composite enforces uniqueness for project-tier rows
 	// (project_id non-null). The partial index enforces a single global row

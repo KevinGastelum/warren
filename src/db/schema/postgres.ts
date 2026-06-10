@@ -138,6 +138,8 @@ export const runs = pgTable(
 		index(INDEX_NAMES.runsWorkerState).on(t.workerId, t.state),
 		index(INDEX_NAMES.runsPlotId).on(t.plotId),
 		index(INDEX_NAMES.runsMode).on(t.mode),
+		// warren-0b75: CI-fixer poller lookup by prUrl — mirror of sqlite.
+		index(INDEX_NAMES.runsPrUrl).on(t.prUrl),
 	],
 );
 
