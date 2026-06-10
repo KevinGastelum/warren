@@ -194,12 +194,16 @@ export async function spawnRun(input: SpawnRunInput): Promise<SpawnRunResult> {
 	// so the branch traces back to the warren run on `git log` / PR review.
 	// Precedence project default > env > "burrow" (the legacy default,
 	// preserved for backward compatibility).
+	// warren-a993: when `targetBranch` is set (CI-fixer case), `composeRunBranch`
+	// returns it directly instead of composing a fresh branch — the fixer must
+	// push to the existing PR branch so CI re-runs on the same PR.
 	const branch = composeRunBranch(
 		resolveRunBranchPrefix({
 			projectDefault: projectDefaults?.runBranchPrefix,
 			envDefault: input.runBranchPrefixDefault,
 		}),
 		run.id,
+		input.targetBranch,
 	);
 
 	// warren-e26f: when the run is bound to a Plot, inject the env vars the

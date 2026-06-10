@@ -146,6 +146,15 @@ export interface SpawnRunInput {
 	 */
 	readonly dispatcherHandle?: string;
 	/**
+	 * CI-fixer target branch override (warren-a993 / warren-05ea). When set,
+	 * `composeRunBranch` returns this branch directly instead of composing a
+	 * fresh `${prefix}/${runId}` name. A CI-fixer run must push to the *existing*
+	 * PR branch so the PR's CI re-runs, not a fresh branch that would open a
+	 * second PR. Empty / whitespace-only values fall back to the composed branch
+	 * so a stray config can never strand a spawn on a blank ref.
+	 */
+	readonly targetBranch?: string;
+	/**
 	 * Test seam for the `run_dispatched` Plot append (warren-e848). The
 	 * default opens a `UserPlotClient` against `<project>/.plot/` and
 	 * fire-and-logs on failure; tests substitute a stub to assert the

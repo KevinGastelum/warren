@@ -297,8 +297,26 @@ export async function reapRun(input: ReapRunInput): Promise<ReapRunResult> {
 			}
 		}
 
-		// Auto-open PR (warren-f6af). See runPrOpen for the gate semantics.
+		// warren-a993: CI-fixer runs push to the existing PR's branch — the parent
+		// run already has a prUrl and we must NOT open a second PR. Check once,
+		// outside the gate, so the lookup is skipped for the overwhelming majority
+		// of runs that have no parentRunId.
+		let parentHasPrUrl = false;
+		if (run.parentRunId !== null) {
+			try {
+				const parent = await input.repos.runs.get(run.parentRunId);
+				parentHasPrUrl = parent?.prUrl !== null && parent?.prUrl !== undefined;
+			} catch {
+				// Non-fatal — if we can't resolve the parent, fall through to the
+				// existing pr_open gate (it may still be appropriate to open a PR).
+			}
+		}
+
+		// Auto-open PR (warren-f6af). Skipped for CI-fixer runs whose parent
+		// already has an open PR (warren-a993): `parentHasPrUrl` means this run
+		// pushed to the existing PR branch; opening a second PR on top is wrong.
 		if (
+			!parentHasPrUrl &&
 			input.autoOpenPr?.enabled === true &&
 			input.outcome === "succeeded" &&
 			branchPushed &&
