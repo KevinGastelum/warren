@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.10] — 2026-06-13
+
+Conversation runs become long-lived pi-chat/leveret sessions, and the
+conversation surface learns pi's event vocabulary.
+
+### Added
+
+- **`feat(ui)`** — the Leveret conversation split-view now renders pi-chat
+  runs (warren-4ccc). `chat-messages.ts` `toMessage()` materializes pi's
+  vocabulary instead of only the legacy brainstorm
+  `user_message`/`agent_message` kinds: `text` → agent bubble, `thinking`
+  → collapsible block, `tool_use`/`tool_result` → compact one-line activity
+  rows; telemetry, `state_change`, `mulch.record.skipped`, and `reap.*`
+  stay noise. The header surfaces the anchoring run state so the pane never
+  looks dead.
+
+### Fixed
+
+- **`feat(runs)`** — `mode:conversation` runs now stay alive across turns
+  (warren-df71). The bridge previously treated pi `agent_end` as
+  run-terminal, killing a conversation on its first turn, reaping it, and
+  opening junk `chore(warren): plot state` PRs. `RunMode` now threads
+  through `bridges.start` → `runWithReconnect` → `bridgeRunStream`, and for
+  conversation runs `agent_end` is a turn boundary (persist usage, flush
+  assistant text, apply intent, keep running). A new `ConversationTurnHandler`
+  persists `role:assistant` messages so reload + re-wake replay are not blank
+  (`ConversationsRepo` gains `getByAnchoringRunId`); `propose_intent` is wired
+  by parsing `result.details.intent_patch` off `tool_execution_end` and applying
+  it via the Plot intent editor as `actor=leveret`. As defense-in-depth,
+  `reapRun` skips the workspace pipeline (branch push / `plot_commit` / PR open)
+  for conversation runs.
+
 ### Changed
 
 - **`quality(dx)`** — adopted the os-eco canonical `check:all` standard
