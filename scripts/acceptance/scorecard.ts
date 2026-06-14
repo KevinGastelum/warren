@@ -65,7 +65,9 @@ export function renderScorecard(results: readonly EvalResult[]): string {
 
 async function main(): Promise<void> {
 	const { runAllProbes } = await import("../eval-probes/index.ts");
-	const results = await runAllProbes();
+	const { loadBudgets, hydrateWithinBudget } = await import("../check-eval-budgets.ts");
+	const raw = await runAllProbes();
+	const results = hydrateWithinBudget(raw, loadBudgets());
 	const md = renderScorecard(results);
 	console.log(md);
 	const { writeFileSync } = await import("node:fs");

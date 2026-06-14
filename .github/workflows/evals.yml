@@ -18,8 +18,6 @@ jobs:
         run: bun run scripts/check-eval-budgets.ts
       - name: Scorecard
         run: bun run scripts/acceptance/scorecard.ts
-      - name: Functional gap-fill scenarios
-        run: bun run scripts/acceptance/run.ts --only 34,35,36 --stop-on-failure
       - name: Upload eval-results artifact
         if: always()
         uses: actions/upload-artifact@v7

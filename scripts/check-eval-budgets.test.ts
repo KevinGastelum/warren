@@ -3,7 +3,13 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { EvalResult } from "./acceptance/lib/eval-result.ts";
-import { diff, type EvalBudgets, gatedMetrics, updateBudgets } from "./check-eval-budgets.ts";
+import {
+	diff,
+	type EvalBudgets,
+	gatedMetrics,
+	hydrateWithinBudget,
+	updateBudgets,
+} from "./check-eval-budgets.ts";
 
 const sample: EvalResult[] = [
 	{
@@ -44,6 +50,27 @@ describe("eval-budgets ratchet", () => {
 
 	test("a measured metric with no budget fails", () => {
 		expect(diff(gatedMetrics(sample), {}).length).toBe(2);
+	});
+
+	test("a unit change vs the stored budget fails as unit-mismatch", () => {
+		const swapped: EvalBudgets = {
+			"canopy.spawnCount": { unit: "bytes", budget: 4 },
+			"canopy.bytes": { unit: "count", budget: 1000 },
+		};
+		const fails = diff(gatedMetrics(sample), swapped);
+		expect(fails.map((f) => f.reason)).toEqual(["unit-mismatch", "unit-mismatch"]);
+	});
+
+	test("hydrateWithinBudget annotates count/bytes and leaves ms alone", () => {
+		const budgets: EvalBudgets = {
+			"canopy.spawnCount": { unit: "count", budget: 3 },
+			"canopy.bytes": { unit: "bytes", budget: 1024 },
+		};
+		const [hydrated] = hydrateWithinBudget(sample, budgets);
+		const pick = (m: string) => hydrated?.efficiency?.find((e) => e.metric === m);
+		expect(pick("canopy.spawnCount")?.withinBudget).toBe(false); // 4 != 3
+		expect(pick("canopy.bytes")?.withinBudget).toBe(true); // 1000 <= 1024
+		expect(pick("canopy.timeMs")?.withinBudget).toBeUndefined(); // ms untouched
 	});
 
 	test("updateBudgets writes exact counts and bytes with headroom", () => {
