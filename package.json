@@ -49,6 +49,8 @@
 		"check:deps": "knip --dependencies",
 		"check:bundle-size": "bun run scripts/check-bundle-size.ts --build",
 		"check:eval-budgets": "bun run scripts/check-eval-budgets.ts",
+		"eval:probes": "bun test scripts/eval-probes/",
+		"eval:scorecard": "bun run scripts/acceptance/scorecard.ts",
 		"gen:docs": "bun run scripts/generate-docs.ts",
 		"gen:docs:check": "bun run scripts/generate-docs.ts --check",
 		"gen:openapi": "bun run scripts/generate-openapi.ts",

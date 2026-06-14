@@ -21,6 +21,7 @@ supabase/
 .vscode/
 test-results/
 coverage/
+eval-results.json
 
 # Factory MCP config contains secrets (e.g. SUPABASE_ACCESS_TOKEN)
 .factory/mcp.json
