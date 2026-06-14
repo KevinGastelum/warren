@@ -145,6 +145,55 @@ after the harness exits. Tear it down with the printed command:
 docker compose -p warren-acceptance-<suffix> down -v
 ```
 
+## os-eco integration evals
+
+A separate, in-process layer that watches the seven os-eco integrations
+(`canopy`, `mulch`, `seeds`, `sapling`, `burrow`, `plot`, `plan-run`)
+for *efficiency regressions* — the work the acceptance scenarios above
+don't catch because they assert behaviour, not call/byte counts. No
+burrow boot, no Docker, no API keys; pure cross-platform `bun test`.
+
+```bash
+bun run eval:probes          # bun test scripts/eval-probes/ — per-integration probes
+bun run check:eval-budgets   # gate measured counts/bytes against scripts/eval-budgets.json
+bun run eval:scorecard       # render the green/amber/red scorecard + write eval-results.json
+```
+
+Each probe imports the real warren module, wraps an injectable seam
+(spawn / fetch / repos) with a `CallCounter`, and emits an `EvalResult`
+carrying `efficiency` metrics with **zero run-to-run variance** —
+`count` metrics are measured deterministically, `bytes` are stable, and
+`ms` is advisory only.
+
+**Budget ratchet** (`scripts/check-eval-budgets.ts`, modeled on
+`check-bundle-size.ts`):
+
+- `count` metrics are gated **exactly** — the measured call count must
+  equal the budget (a new shell-out or fetch round-trip fails CI). This
+  is the N+1 guard.
+- `bytes` metrics are **ratcheted** — measured must be ≤ budget. Re-baseline
+  with `bun run check:eval-budgets -- --update` (writes measured + 256B
+  headroom; raises past the 512B auto-cap need
+  `WARREN_EVAL_BUDGET_ALLOW_RAISE=1`).
+- `ms` metrics are **never gated** (machine-dependent).
+
+The eval gate runs as its own per-PR workflow, not as a `check:all`
+gate: `scripts/check-all.ts` is the byte-identical fleet-canonical
+runner (os-eco check:all standard) and is not edited per-repo, so
+`check:eval-budgets` lives outside it. `.github/workflows/evals.yml`
+(a non-`ci` workflow, file-form invocations, so `check:ci-parity`
+leaves it alone) runs the ratchet + scorecard on every PR and push to
+`main`; the scorecard markdown lands in the job's
+`$GITHUB_STEP_SUMMARY` and `eval-results.json` is uploaded as an
+artifact.
+
+The scorecard grades each integration `🟢/🟡/🔴` (⚪ = no eval ran):
+**red** = a functioning assertion failed or any efficiency/cost metric
+is over budget; **amber** = cost within 10% of its ceiling or quality
+below the soft floor; **green** otherwise. The functional gap-fill
+scenarios (34–36) and real-LLM quality/cost evals (37–38) are tracked
+as follow-up work and run in CI when present.
+
 ## Manual gate — `--real` claude-code run
 
 Verifies the §11.E first-run path: a real claude-code run, with a real
