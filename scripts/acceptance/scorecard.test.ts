@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { EvalResult } from "./lib/eval-result.ts";
-import { renderScorecard, scoreIntegration } from "./scorecard.ts";
+import { redIntegrations, renderScorecard, scoreIntegration } from "./scorecard.ts";
 
 const base = (over: Partial<EvalResult>): EvalResult => ({
 	integration: "mulch",
@@ -36,5 +36,17 @@ describe("scorecard", () => {
 		expect(md).toContain("mulch");
 		expect(md).toContain("canopy");
 		expect(md).toMatch(/🟢|🟡|🔴/);
+	});
+
+	test("redIntegrations returns only the integrations graded red", () => {
+		const reds = redIntegrations([
+			base({ integration: "mulch", functioning: { ok: false, assertions: [] } }),
+			base({ integration: "canopy" }),
+		]);
+		expect(reds).toEqual(["mulch"]);
+	});
+
+	test("redIntegrations is empty when all green", () => {
+		expect(redIntegrations([base({ integration: "mulch" })])).toEqual([]);
 	});
 });

@@ -63,6 +63,16 @@ export function renderScorecard(results: readonly EvalResult[]): string {
 	return lines.join("\n");
 }
 
+/** Integrations graded 🔴 — the set that must fail the CLI / CI gate. */
+export function redIntegrations(results: readonly EvalResult[]): Integration[] {
+	const { byIntegration } = collectResults(results);
+	const reds: Integration[] = [];
+	for (const [integration, rs] of byIntegration) {
+		if (rs.length > 0 && scoreIntegration(rs) === "red") reds.push(integration);
+	}
+	return reds;
+}
+
 async function main(): Promise<void> {
 	const { runAllProbes } = await import("../eval-probes/index.ts");
 	const { loadBudgets, hydrateWithinBudget } = await import("../check-eval-budgets.ts");
@@ -74,6 +84,11 @@ async function main(): Promise<void> {
 	writeFileSync("eval-results.json", `${JSON.stringify(results, null, "\t")}\n`);
 	const summaryPath = process.env.GITHUB_STEP_SUMMARY;
 	if (summaryPath) writeFileSync(summaryPath, `${md}\n`, { flag: "a" });
+	const reds = redIntegrations(results);
+	if (reds.length > 0) {
+		console.error(`✗ scorecard: ${reds.length} integration(s) graded 🔴: ${reds.join(", ")}`);
+		process.exit(1);
+	}
 }
 
 if (import.meta.main) await main();
