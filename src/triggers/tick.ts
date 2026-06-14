@@ -161,59 +161,61 @@ async function runProjectTick(input: RunProjectTickInput): Promise<void> {
 		logCronResult(deps.logger, project.id, trigger.id, result);
 	}
 
-	let seedsResult: Awaited<ReturnType<ListScheduledSeedsFn>>;
-	try {
-		seedsResult = await deps.listScheduledSeeds(project.localPath);
-	} catch (err) {
-		// pl-2f15 risk #4: shell-out failures must not double-dispatch on
-		// the next tick. We never wrote a warren-side row for these seeds,
-		// so retrying on the next tick is correct.
-		deps.logger?.warn(
-			{ projectId: project.id, reason: formatError(err) },
-			"scheduler.sd_list_failed",
-		);
-		return;
-	}
+	if (project.hasSeeds) {
+		let seedsResult: Awaited<ReturnType<ListScheduledSeedsFn>>;
+		try {
+			seedsResult = await deps.listScheduledSeeds(project.localPath);
+		} catch (err) {
+			// pl-2f15 risk #4: shell-out failures must not double-dispatch on
+			// the next tick. We never wrote a warren-side row for these seeds,
+			// so retrying on the next tick is correct.
+			deps.logger?.warn(
+				{ projectId: project.id, reason: formatError(err) },
+				"scheduler.sd_list_failed",
+			);
+			return;
+		}
 
-	for (const err of seedsResult.errors) {
-		deps.logger?.warn(
-			{ projectId: project.id, seedId: err.seedId, reason: err.message },
-			"scheduler.scheduled_for_parse_error",
-		);
-	}
+		for (const err of seedsResult.errors) {
+			deps.logger?.warn(
+				{ projectId: project.id, seedId: err.seedId, reason: err.message },
+				"scheduler.scheduled_for_parse_error",
+			);
+		}
 
-	for (const seed of seedsResult.scheduled) {
-		const result = await dispatchScheduledSeed({
-			projectId: project.id,
-			seed,
-			defaults: config.defaults,
-			now,
-			spawn: deps.spawn,
-		});
-		scheduled.push(result);
-		logScheduledResult(deps.logger, project.id, result);
+		for (const seed of seedsResult.scheduled) {
+			const result = await dispatchScheduledSeed({
+				projectId: project.id,
+				seed,
+				defaults: config.defaults,
+				now,
+				spawn: deps.spawn,
+			});
+			scheduled.push(result);
+			logScheduledResult(deps.logger, project.id, result);
 
-		if (result.kind === "fired") {
-			// Risk #4: write-once semantics. We dispatched the seed; even if
-			// the merged extension write fails, the warren-side run row is
-			// authoritative. Failure stamps a system event on the run so the
-			// operator sees the lingering scheduledFor without tailing logs.
-			// pl-bb70 step 5: collapse the prior clearScheduledFor + (no-op
-			// spawn-side write) into one sd update that carries scheduledFor
-			// clear + lastScheduledRun pointer + the warren-namespaced common
-			// keys (role, trigger, lastRunId, lastRunAt).
-			const extensions: WarrenExtensions = {
-				role: result.role,
-				trigger: "scheduled",
-				lastRunId: result.runId,
-				lastRunAt: nowIso,
-				scheduledFor: null,
-				lastScheduledRun: result.runId,
-			};
-			try {
-				await deps.updateExtensions(project.localPath, result.seedId, extensions);
-			} catch (err) {
-				await recordClearFailure(deps, result.runId, result.seedId, formatError(err));
+			if (result.kind === "fired") {
+				// Risk #4: write-once semantics. We dispatched the seed; even if
+				// the merged extension write fails, the warren-side run row is
+				// authoritative. Failure stamps a system event on the run so the
+				// operator sees the lingering scheduledFor without tailing logs.
+				// pl-bb70 step 5: collapse the prior clearScheduledFor + (no-op
+				// spawn-side write) into one sd update that carries scheduledFor
+				// clear + lastScheduledRun pointer + the warren-namespaced common
+				// keys (role, trigger, lastRunId, lastRunAt).
+				const extensions: WarrenExtensions = {
+					role: result.role,
+					trigger: "scheduled",
+					lastRunId: result.runId,
+					lastRunAt: nowIso,
+					scheduledFor: null,
+					lastScheduledRun: result.runId,
+				};
+				try {
+					await deps.updateExtensions(project.localPath, result.seedId, extensions);
+				} catch (err) {
+					await recordClearFailure(deps, result.runId, result.seedId, formatError(err));
+				}
 			}
 		}
 	}
