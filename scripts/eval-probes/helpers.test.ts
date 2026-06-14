@@ -4,7 +4,7 @@ import { byteLen, countingFetch, countingSpawn } from "./helpers.ts";
 describe("eval-probes helpers", () => {
 	test("countingSpawn counts each call and forwards to the inner fn", async () => {
 		const counter = { n: 0 };
-		const spawn = countingSpawn(counter, async () => ({
+		const spawn = countingSpawn(counter, async (_cmd: readonly string[], _opts: unknown) => ({
 			exitCode: 0,
 			stdout: "ok",
 			stderr: "",
