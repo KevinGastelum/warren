@@ -9,14 +9,20 @@ export interface CallCounter {
 	n: number;
 }
 
-type SpawnLike = (cmd: readonly string[], opts: unknown) => Promise<unknown>;
-
-export function countingSpawn<T extends SpawnLike>(counter: CallCounter, inner: T): T {
-	const wrapped = (cmd: readonly string[], opts: unknown) => {
+/**
+ * Variadic so the wrapper preserves the inner fn's EXACT signature. A
+ * fixed `(cmd, opts: unknown)` shape would reject narrower seams like
+ * canopy's `SpawnFn` (opts: SpawnOptions) under strictFunctionTypes —
+ * param contravariance makes the narrower type non-assignable.
+ */
+export function countingSpawn<A extends readonly unknown[], R>(
+	counter: CallCounter,
+	inner: (...args: A) => R,
+): (...args: A) => R {
+	return (...args: A) => {
 		counter.n += 1;
-		return inner(cmd, opts);
+		return inner(...args);
 	};
-	return wrapped as T;
 }
 
 /**
