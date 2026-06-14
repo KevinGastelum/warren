@@ -177,11 +177,15 @@ carrying `efficiency` metrics with **zero run-to-run variance** —
   `WARREN_EVAL_BUDGET_ALLOW_RAISE=1`).
 - `ms` metrics are **never gated** (machine-dependent).
 
-`check:eval-budgets` is wired into `check:all`. CI runs the probes,
-ratchet, and scorecard in `.github/workflows/evals.yml` (a non-`ci`
-workflow, file-form invocations, so `check:ci-parity` leaves it alone);
-the scorecard markdown lands in the job's `$GITHUB_STEP_SUMMARY` and
-`eval-results.json` is uploaded as an artifact.
+The eval gate runs as its own per-PR workflow, not as a `check:all`
+gate: `scripts/check-all.ts` is the byte-identical fleet-canonical
+runner (os-eco check:all standard) and is not edited per-repo, so
+`check:eval-budgets` lives outside it. `.github/workflows/evals.yml`
+(a non-`ci` workflow, file-form invocations, so `check:ci-parity`
+leaves it alone) runs the ratchet + scorecard on every PR and push to
+`main`; the scorecard markdown lands in the job's
+`$GITHUB_STEP_SUMMARY` and `eval-results.json` is uploaded as an
+artifact.
 
 The scorecard grades each integration `🟢/🟡/🔴` (⚪ = no eval ran):
 **red** = a functioning assertion failed or any efficiency/cost metric
