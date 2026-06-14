@@ -83,6 +83,7 @@ describe("bootScheduler", () => {
 			gitUrl: "https://github.com/x/y.git",
 			localPath: "/data/projects/x/y",
 			defaultBranch: "main",
+			hasSeeds: true,
 		});
 		projectId = project.id;
 		projectPath = project.localPath;

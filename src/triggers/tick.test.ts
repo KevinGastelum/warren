@@ -52,6 +52,7 @@ describe("runTick", () => {
 			gitUrl: "https://github.com/x/y.git",
 			localPath: "/data/projects/x/y",
 			defaultBranch: "main",
+			hasSeeds: true,
 		});
 		projectId = project.id;
 		localPath = project.localPath;
@@ -235,6 +236,7 @@ describe("runTick", () => {
 			gitUrl: "https://github.com/x/z.git",
 			localPath: "/data/projects/x/z",
 			defaultBranch: "main",
+			hasSeeds: true,
 		});
 
 		const seenPaths: string[] = [];

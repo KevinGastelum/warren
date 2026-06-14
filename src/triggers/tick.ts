@@ -135,7 +135,6 @@ interface RunProjectTickInput {
 
 async function runProjectTick(input: RunProjectTickInput): Promise<void> {
 	const { deps, project, now, cron, scheduled } = input;
-	const nowIso = now.toISOString();
 	const config = await deps.loadWarrenConfig(project.id, project.localPath);
 
 	// Surface .warren/ parse errors at info-level — the GET /warren-config
@@ -160,6 +159,27 @@ async function runProjectTick(input: RunProjectTickInput): Promise<void> {
 		cron.push(result);
 		logCronResult(deps.logger, project.id, trigger.id, result);
 	}
+
+	if (project.hasSeeds) {
+		await dispatchScheduledSeedsForProject({ deps, project, config, now, scheduled });
+	}
+}
+
+interface DispatchScheduledSeedsInput {
+	readonly deps: TickDeps;
+	readonly project: ProjectRow;
+	readonly config: LoadedWarrenConfig;
+	readonly now: Date;
+	readonly scheduled: DispatchScheduledResult[];
+}
+
+// Shells out for past-due scheduled-for seeds and dispatches each, then folds
+// the scheduled-fire clear + warren-namespaced keys into one updateExtensions
+// merge (pl-bb70 step 5). Extracted from runProjectTick so that function stays
+// under the cognitive-complexity ceiling once the hasSeeds gate was added.
+async function dispatchScheduledSeedsForProject(input: DispatchScheduledSeedsInput): Promise<void> {
+	const { deps, project, config, now, scheduled } = input;
+	const nowIso = now.toISOString();
 
 	let seedsResult: Awaited<ReturnType<ListScheduledSeedsFn>>;
 	try {
