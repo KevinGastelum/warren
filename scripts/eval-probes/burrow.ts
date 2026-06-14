@@ -8,6 +8,11 @@ import { type CallCounter, countingFetch } from "./helpers.ts";
  * the allowlisted HttpClient route), so wrapping fetch with a counter lets us
  * assert "provisioning a burrow is one round-trip". The stub Response carries
  * the date fields `reviveBurrow` dereferences so the success path completes.
+ *
+ * A thrown `burrowsUp()` (e.g. burrow-cli's revive schema drifts) is a real
+ * functional break, so it fails `functioning.ok` with a `burrowsUp-succeeded`
+ * assertion carrying the error — the fetch-count metric is still emitted so
+ * the budget gate keeps working even on the failing path.
  */
 const stubResponse = (): Response =>
 	new Response(
@@ -21,31 +26,36 @@ const stubResponse = (): Response =>
 		{ status: 200, headers: { "content-type": "application/json" } },
 	);
 
-export async function runBurrowProbe(): Promise<EvalResult> {
+export async function runBurrowProbe(
+	fetchImpl: (input: Request | string | URL, init?: RequestInit) => Promise<Response> = async () =>
+		stubResponse(),
+): Promise<EvalResult> {
 	const counter: CallCounter = { n: 0 };
 	const client = new BurrowClient({
 		config: { transport: { kind: "tcp", hostname: "127.0.0.1", port: 65535 } },
-		fetch: countingFetch(counter, async () => stubResponse()),
+		fetch: countingFetch(counter, fetchImpl),
 	});
 
 	const start = Date.now();
-	let ok = false;
+	let threw: string | null = null;
 	try {
 		await client.burrowsUp({ projectRoot: "/repo", env: { PROBE: "1" } });
-		ok = counter.n === 1;
-	} catch {
-		// Schema drift in @os-eco/burrow-cli's revive path shouldn't fail the
-		// efficiency assertion — the round-trip count is what we gate on.
-		ok = counter.n === 1;
+	} catch (err) {
+		threw = err instanceof Error ? err.message : String(err);
 	}
 	const durationMs = Date.now() - start;
 
+	const oneRoundTrip = counter.n === 1;
+	const succeeded = threw === null;
 	return {
 		integration: "burrow",
 		scenarioId: "probe:burrow",
 		functioning: {
-			ok,
-			assertions: [{ name: "one-round-trip", ok: counter.n === 1 }],
+			ok: succeeded && oneRoundTrip,
+			assertions: [
+				{ name: "one-round-trip", ok: oneRoundTrip },
+				{ name: "burrowsUp-succeeded", ok: succeeded, ...(threw !== null && { detail: threw }) },
+			],
 		},
 		efficiency: [
 			{ metric: "burrow.burrowsUp.fetchCount", value: counter.n, unit: "count" },

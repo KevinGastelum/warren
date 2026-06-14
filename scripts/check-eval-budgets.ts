@@ -47,7 +47,12 @@ export interface GatedMetric {
 
 export interface Failure {
 	readonly metric: string;
-	readonly reason: "no-budget" | "count-mismatch" | "bytes-overage" | "stale-budget";
+	readonly reason:
+		| "no-budget"
+		| "count-mismatch"
+		| "bytes-overage"
+		| "stale-budget"
+		| "unit-mismatch";
 	readonly actual?: number;
 	readonly budget?: number;
 }
@@ -72,6 +77,15 @@ export function diff(measured: readonly GatedMetric[], budgets: EvalBudgets): Fa
 		const b = budgets[m.metric];
 		if (b === undefined) {
 			failures.push({ metric: m.metric, reason: "no-budget", actual: m.value });
+			continue;
+		}
+		if (b.unit !== m.unit) {
+			failures.push({
+				metric: m.metric,
+				reason: "unit-mismatch",
+				actual: m.value,
+				budget: b.budget,
+			});
 			continue;
 		}
 		if (m.unit === "count" && m.value !== b.budget) {
@@ -154,6 +168,29 @@ export function loadBudgets(budgetsPath = BUDGETS_PATH): EvalBudgets {
 	return raw.metrics;
 }
 
+/**
+ * Annotate each gated efficiency metric with its `budget` + `withinBudget`
+ * from the ratchet, so the scorecard's red-on-overage branch actually fires
+ * in the `eval:scorecard` CLI path (probes themselves don't know the floors).
+ * `ms` metrics and metrics with no budget pass through untouched. Uses the
+ * same rule as `diff()`: exact for `count`, ≤ for `bytes`.
+ */
+export function hydrateWithinBudget(
+	results: readonly EvalResult[],
+	budgets: EvalBudgets,
+): EvalResult[] {
+	return results.map((r) => ({
+		...r,
+		efficiency: r.efficiency?.map((e) => {
+			if (e.unit === "ms") return e;
+			const b = budgets[e.metric];
+			if (b === undefined || b.unit !== e.unit) return e;
+			const withinBudget = e.unit === "count" ? e.value === b.budget : e.value <= b.budget;
+			return { ...e, budget: b.budget, withinBudget };
+		}),
+	}));
+}
+
 function printAdvisory(results: readonly EvalResult[]): void {
 	for (const r of results) {
 		for (const e of r.efficiency ?? []) {
@@ -167,6 +204,9 @@ function describeFailure(f: Failure): string {
 		return `  ${f.metric}: measured ${f.actual} but no budget (run --update)`;
 	if (f.reason === "stale-budget") {
 		return `  ${f.metric}: budget present but probe no longer emits it (run --update)`;
+	}
+	if (f.reason === "unit-mismatch") {
+		return `  ${f.metric}: unit changed vs stored budget (run --update)`;
 	}
 	return `  ${f.metric}: actual ${f.actual} vs budget ${f.budget} (${f.reason})`;
 }
