@@ -19,7 +19,18 @@ export function countingSpawn<T extends SpawnLike>(counter: CallCounter, inner: 
 	return wrapped as T;
 }
 
-export function countingFetch(counter: CallCounter, inner: typeof fetch): typeof fetch {
+/**
+ * Loose fetch shape: the wrapper only needs to forward args and return a
+ * response, so the inner stub need not carry `fetch`'s extra `preconnect`
+ * member. The wrapper is cast back to `typeof fetch` so callers that type
+ * their seam as `typeof fetch` (e.g. BurrowClient) accept it.
+ */
+type FetchLike = (
+	input: Parameters<typeof fetch>[0],
+	init?: Parameters<typeof fetch>[1],
+) => Promise<Response>;
+
+export function countingFetch(counter: CallCounter, inner: FetchLike): typeof fetch {
 	const wrapped = ((input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
 		counter.n += 1;
 		return inner(input, init);
