@@ -11,6 +11,26 @@ import type { Repos } from "../../db/repos/index.ts";
 import { composeDispatchPrompt, spawnRun } from "./index.ts";
 import { makeAgentJson, makeBurrowClient, makePool, setupRepos, stub } from "./test-helpers.ts";
 
+// warren-c686: mirrors the SilentLogger/makeLogger pattern in
+// src/triggers/tick.test.ts so spawn's new instrumentation is asserted the
+// same way the rest of the codebase already tests optional-logger call sites.
+interface SilentLogger {
+	logs: { level: "info" | "warn" | "error"; obj: Record<string, unknown>; msg?: string }[];
+	info: (obj: Record<string, unknown>, msg?: string) => void;
+	warn: (obj: Record<string, unknown>, msg?: string) => void;
+	error: (obj: Record<string, unknown>, msg?: string) => void;
+}
+
+function makeLogger(): SilentLogger {
+	const logs: SilentLogger["logs"] = [];
+	return {
+		logs,
+		info: (obj, msg) => logs.push({ level: "info", obj, msg }),
+		warn: (obj, msg) => logs.push({ level: "warn", obj, msg }),
+		error: (obj, msg) => logs.push({ level: "error", obj, msg }),
+	};
+}
+
 describe("spawnRun: validation", () => {
 	let db: WarrenDb;
 	let repos: Repos;
@@ -127,6 +147,37 @@ describe("spawnRun: end-to-end + placement", () => {
 		expect(reread.workerId).toBe("local");
 		const burrowRow = await repos.burrows.require("bur_aaaaaaaaaaaa");
 		expect(burrowRow.workerId).toBe("local");
+	});
+
+	test("logs placement, provision, and dispatch success with run_id + request_id (warren-c686)", async () => {
+		const { client } = makeBurrowClient();
+		const logger = makeLogger();
+		const result = await spawnRun({
+			repos,
+			burrowClientPool: await makePool(repos, client),
+			agentName: "refactor-bot",
+			projectId: "prj_xxxxxxxxxxxx",
+			prompt: "fix the flaky test",
+			logger,
+			requestId: "req_abc123",
+		});
+
+		const placement = logger.logs.find((l) => l.msg === "spawn.placement_resolved");
+		expect(placement).toBeDefined();
+		expect(placement?.obj.run_id).toBe(result.run.id);
+		expect(placement?.obj.request_id).toBe("req_abc123");
+
+		const provisioned = logger.logs.find((l) => l.msg === "spawn.provision_succeeded");
+		expect(provisioned).toBeDefined();
+		expect(provisioned?.obj.run_id).toBe(result.run.id);
+		expect(provisioned?.obj.request_id).toBe("req_abc123");
+		expect(typeof provisioned?.obj.elapsed_ms).toBe("number");
+
+		const dispatched = logger.logs.find((l) => l.msg === "spawn.dispatch_succeeded");
+		expect(dispatched).toBeDefined();
+		expect(dispatched?.obj.run_id).toBe(result.run.id);
+		expect(dispatched?.obj.request_id).toBe("req_abc123");
+		expect(typeof dispatched?.obj.elapsed_ms).toBe("number");
 	});
 
 	test("placement: writes worker_id under a non-default worker name (warren-39c3)", async () => {
@@ -409,6 +460,7 @@ describe("spawnRun: rollback", () => {
 				},
 			},
 		});
+		const logger = makeLogger();
 		await expect(
 			spawnRun({
 				repos,
@@ -416,6 +468,8 @@ describe("spawnRun: rollback", () => {
 				agentName: "refactor-bot",
 				projectId: "prj_xxxxxxxxxxxx",
 				prompt: "p",
+				logger,
+				requestId: "req_r07",
 			}),
 		).rejects.toBeDefined();
 
@@ -427,13 +481,31 @@ describe("spawnRun: rollback", () => {
 
 		const methods = calls.map((c) => `${c.method} ${c.path}`);
 		expect(methods).toEqual(["POST /burrows"]);
+
+		// warren-c686: no burrow was ever provisioned on this path, so rollback
+		// only exercises the finalize branch — asserted here at success level.
+		const finalized = logger.logs.find((l) => l.msg === "spawn.rollback_finalized");
+		expect(finalized).toBeDefined();
+		expect(finalized?.obj.run_id).toBe(rows[0]?.id);
+		expect(finalized?.obj.request_id).toBe("req_r07");
 	});
 
-	test("rolls back when burrow dispatch fails", async () => {
+	test("logs spawn.rollback_finalize_failed when runs.finalize throws during rollback (warren-c686: previously a bare catch {})", async () => {
 		const { client, calls } = makeBurrowClient({
-			runsCreateStatus: 500,
-			runsCreateBody: { error: { code: "internal_error", message: "boom" } },
+			burrowsUpStatus: 422,
+			burrowsUpBody: {
+				error: {
+					code: "validation_error",
+					message: "seed file rejected: workspace path escapes root",
+				},
+			},
 		});
+		// Reassigns the own property, shadowing RunsRepo.prototype.finalize for
+		// this test's repos instance only (fresh per-test via beforeEach).
+		repos.runs.finalize = async () => {
+			throw new Error("db is closed");
+		};
+		const logger = makeLogger();
 		await expect(
 			spawnRun({
 				repos,
@@ -441,6 +513,38 @@ describe("spawnRun: rollback", () => {
 				agentName: "refactor-bot",
 				projectId: "prj_xxxxxxxxxxxx",
 				prompt: "p",
+				logger,
+				requestId: "req_finalize_fail",
+			}),
+		).rejects.toBeDefined();
+
+		const failure = logger.logs.find((l) => l.msg === "spawn.rollback_finalize_failed");
+		expect(failure).toBeDefined();
+		expect(failure?.level).toBe("error");
+		expect(failure?.obj.request_id).toBe("req_finalize_fail");
+		expect(failure?.obj.reason).toContain("db is closed");
+
+		// The original 422 (not the swallowed finalize failure) still reaches
+		// the caller — rollback failures must never mask the real error.
+		const methods = calls.map((c) => `${c.method} ${c.path}`);
+		expect(methods).toEqual(["POST /burrows"]);
+	});
+
+	test("rolls back when burrow dispatch fails", async () => {
+		const { client, calls } = makeBurrowClient({
+			runsCreateStatus: 500,
+			runsCreateBody: { error: { code: "internal_error", message: "boom" } },
+		});
+		const logger = makeLogger();
+		await expect(
+			spawnRun({
+				repos,
+				burrowClientPool: await makePool(repos, client),
+				agentName: "refactor-bot",
+				projectId: "prj_xxxxxxxxxxxx",
+				prompt: "p",
+				logger,
+				requestId: "req_dispatch_fail",
 			}),
 		).rejects.toBeDefined();
 
@@ -449,6 +553,53 @@ describe("spawnRun: rollback", () => {
 		expect(rows[0]?.state).toBe("cancelled");
 		expect(rows[0]?.burrowId).toBe("bur_aaaaaaaaaaaa");
 		expect(rows[0]?.burrowRunId).toBeNull();
+		const methods = calls.map((c) => `${c.method} ${c.path}`);
+		expect(methods).toContain("DELETE /burrows/bur_aaaaaaaaaaaa");
+
+		// warren-c686: this path provisions a burrow before dispatch fails, so
+		// rollback exercises both the finalize AND the burrow-destroy branch.
+		const finalized = logger.logs.find((l) => l.msg === "spawn.rollback_finalized");
+		expect(finalized).toBeDefined();
+		const destroyed = logger.logs.find((l) => l.msg === "spawn.rollback_burrow_destroyed");
+		expect(destroyed).toBeDefined();
+		expect(destroyed?.obj.burrow_id).toBe("bur_aaaaaaaaaaaa");
+		expect(destroyed?.obj.request_id).toBe("req_dispatch_fail");
+	});
+
+	test("logs spawn.rollback_burrow_destroy_failed when burrow destroy throws during rollback (warren-c686: previously a bare catch {})", async () => {
+		const { client, calls } = makeBurrowClient({
+			runsCreateStatus: 500,
+			runsCreateBody: { error: { code: "internal_error", message: "boom" } },
+			destroyStatus: 500,
+			destroyBody: { error: { code: "internal_error", message: "burrow destroy exploded" } },
+		});
+		const logger = makeLogger();
+		await expect(
+			spawnRun({
+				repos,
+				burrowClientPool: await makePool(repos, client),
+				agentName: "refactor-bot",
+				projectId: "prj_xxxxxxxxxxxx",
+				prompt: "p",
+				logger,
+				requestId: "req_destroy_fail",
+			}),
+		).rejects.toBeDefined();
+
+		const failure = logger.logs.find((l) => l.msg === "spawn.rollback_burrow_destroy_failed");
+		expect(failure).toBeDefined();
+		expect(failure?.level).toBe("error");
+		expect(failure?.obj.request_id).toBe("req_destroy_fail");
+		expect(failure?.obj.burrow_id).toBe("bur_aaaaaaaaaaaa");
+		expect(failure?.obj.reason).toContain("burrow destroy exploded");
+
+		// The finalize branch is independent of the destroy branch and still
+		// succeeds (and logs success) even though destroy blew up.
+		const finalized = logger.logs.find((l) => l.msg === "spawn.rollback_finalized");
+		expect(finalized).toBeDefined();
+
+		// The original dispatch failure (not the swallowed destroy failure)
+		// still reaches the caller.
 		const methods = calls.map((c) => `${c.method} ${c.path}`);
 		expect(methods).toContain("DELETE /burrows/bur_aaaaaaaaaaaa");
 	});
