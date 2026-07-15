@@ -76,20 +76,37 @@ their work do not file.
 
 Changes to this file, to auditor prompts (`.canopy/` agent entries for
 gatewatch / ratchetwatch / tastewatch), or to `.warren/triggers.yaml`
-audit entries require explicit human review — they must not ride an
-auto-merged PR. Any auditor that observes a merged change to these
-files without human approval files a priority-1 finding citing this
-article. The population does not rewrite its own mandate.
+audit entries require explicit review by a **trusted approver** before
+they merge — they must not ride an unreviewed auto-merged PR. A trusted
+approver is either a human, or a qualified agent acting in a review
+capacity: a git/merge-specialist Warren worker, the Codex auditor, or an
+Opus-4.8-tier agent. The approver must be independent of the change's
+author (no self-approval) and records the sign-off explicitly (a PR
+approval review, or the `article-ix-approved` label). Any auditor that
+observes a merged change to these files with no recorded trusted-approver
+sign-off files a priority-1 finding citing this article. The population
+does not rewrite its own mandate unreviewed.
 
 Executable form: the "Article IX check" step in
 `.github/workflows/auto-merge.yml` refuses to enable auto-merge on any
 PR touching this file, `.warren/triggers.yaml`, `.canopy/`, or that
-workflow itself. The auditors still verify (the gate can be deleted;
-the deletion is itself a protected change).
+workflow itself, UNLESS the PR carries the `article-ix-approved` label
+(applied by a trusted approver per above). The label records a sign-off
+but does not itself prove independence — any repo-write actor can apply
+it — so no-self-approval is a duty on the approver that the auditors
+verify post-merge, not a property the gate enforces. (A stronger gate
+would require branch protection + CODEOWNERS or an actor allowlist; the
+fork does not run one.) The auditors still verify (the gate can be
+deleted; the deletion is itself a protected change).
+
+Operator note (fork-local): this delegation from "human-only" to
+"trusted approver" is the fork operator's governance choice
+(KevinGastelum/warren, 2026-07-14). Upstream may retain the stricter
+human-only form; do not assume this relaxation applies there.
 
 ## Amendments
 
-Amend by PR touching this file, flagged for human merge (Article IX).
+Amend by PR touching this file, flagged for trusted-approver merge (Article IX).
 Tastewatch's weekly digest may propose amendments; it may not apply
 them. When an article becomes fully enforceable as an executable gate,
 note the gate here and retire the manual check.
