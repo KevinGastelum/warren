@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { collectResults, type EvalResult, emptyEfficiency } from "./eval-result.ts";
+import { collectResults, type EvalResult } from "./eval-result.ts";
 
 const sample = (over: Partial<EvalResult> = {}): EvalResult => ({
 	integration: "mulch",
@@ -10,10 +10,6 @@ const sample = (over: Partial<EvalResult> = {}): EvalResult => ({
 });
 
 describe("eval-result", () => {
-	test("emptyEfficiency returns an empty array", () => {
-		expect(emptyEfficiency()).toEqual([]);
-	});
-
 	test("collectResults groups by integration and counts failures", () => {
 		const results = [
 			sample(),

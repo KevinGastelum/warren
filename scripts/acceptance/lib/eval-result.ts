@@ -46,10 +46,6 @@ export interface EvalResult {
 	readonly durationMs: number;
 }
 
-export function emptyEfficiency(): EvalEfficiency[] {
-	return [];
-}
-
 export interface ResultSummary {
 	readonly total: number;
 	readonly failing: number;
