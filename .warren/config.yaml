@@ -13,7 +13,12 @@
 defaultRole: pi
 defaultBranch: main
 defaultProvider: anthropic
-defaultModel: claude-opus-4-8
+# defaultModel intentionally UNSET (warren-46c2, 2026-07-14). A pinned
+# defaultModel overrides EVERY agent's tier, silently forcing sonnet-tier
+# agents (pi / claude-code / bugwatch / pr-fixer) onto Opus on any dispatch
+# that doesn't pass a per-run model — including cron/scheduled and plan-runs.
+# Left unset so each agent's own frontmatter tier applies; pass a per-run
+# --model / modelOverride to override a single run.
 
 # ── Optional knobs (uncomment to set) ───────────────────────────────────
 

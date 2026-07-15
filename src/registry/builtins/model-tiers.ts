@@ -45,7 +45,7 @@ export function resolveModelTiers(
 		},
 		sonnet: {
 			provider: pick(env.WARREN_MODEL_SONNET_PROVIDER, "anthropic"),
-			model: pick(env.WARREN_MODEL_SONNET, "claude-sonnet-4-6"),
+			model: pick(env.WARREN_MODEL_SONNET, "claude-sonnet-5"),
 		},
 	};
 }

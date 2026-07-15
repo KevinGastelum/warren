@@ -368,7 +368,7 @@ export function NewPlanRunPage() {
 									placeholder={
 										modelAutoFill.length > 0
 											? modelAutoFill
-											: "claude-sonnet-4-6, gpt-4o, …"
+											: "claude-sonnet-5, gpt-4o, …"
 									}
 									disabled={!hasSeeds}
 									autoComplete="off"

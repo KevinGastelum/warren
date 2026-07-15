@@ -89,6 +89,9 @@ async function seedRun(repos: Repos, opts: SeedRunOpts): Promise<void> {
 	}
 }
 
+// Lower bound predating the May-2026 fixtures; avoids the 30-day default window (warren-46c2).
+const FIXTURE_WINDOW = "from=2026-05-01T00:00:00.000Z";
+
 describe("GET /analytics/runs", () => {
 	let db: WarrenDb;
 	let repos: Repos;
@@ -168,7 +171,7 @@ describe("GET /analytics/runs", () => {
 			endedAt: "2026-05-21T10:02:00.000Z",
 		});
 		start();
-		const res = await fetch(`${tcpUrl(handle as ServeHandle)}/analytics/runs`);
+		const res = await fetch(`${tcpUrl(handle as ServeHandle)}/analytics/runs?${FIXTURE_WINDOW}`);
 		expect(res.status).toBe(200);
 		const body = (await res.json()) as {
 			totals: { runs: number; succeeded: number; failed: number; successRate: number };
@@ -250,7 +253,7 @@ describe("GET /analytics/runs", () => {
 			endedAt: "2026-05-21T12:02:00.000Z",
 		});
 		start();
-		const res = await fetch(`${tcpUrl(handle as ServeHandle)}/analytics/runs`);
+		const res = await fetch(`${tcpUrl(handle as ServeHandle)}/analytics/runs?${FIXTURE_WINDOW}`);
 		expect(res.status).toBe(200);
 		const body = (await res.json()) as {
 			tokens: {
@@ -327,7 +330,7 @@ describe("GET /analytics/runs", () => {
 		});
 		start();
 		const res = await fetch(
-			`${tcpUrl(handle as ServeHandle)}/analytics/runs?projectId=${projectId}`,
+			`${tcpUrl(handle as ServeHandle)}/analytics/runs?projectId=${projectId}&${FIXTURE_WINDOW}`,
 		);
 		expect(res.status).toBe(200);
 		const body = (await res.json()) as {
@@ -460,7 +463,9 @@ describe("GET /analytics/behavior", () => {
 		await toolResult(runId, 6, "u3", false);
 
 		start();
-		const res = await fetch(`${tcpUrl(handle as ServeHandle)}/analytics/behavior`);
+		const res = await fetch(
+			`${tcpUrl(handle as ServeHandle)}/analytics/behavior?${FIXTURE_WINDOW}`,
+		);
 		expect(res.status).toBe(200);
 		const body = (await res.json()) as {
 			mining: {
