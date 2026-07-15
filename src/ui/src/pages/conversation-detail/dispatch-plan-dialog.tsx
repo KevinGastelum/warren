@@ -330,7 +330,7 @@ function DispatchPlanDialog({
 									setModelTouched(true);
 								}}
 								placeholder={
-									modelAutoFill.length > 0 ? modelAutoFill : "claude-sonnet-4-6, gpt-4o, …"
+									modelAutoFill.length > 0 ? modelAutoFill : "claude-sonnet-5, gpt-4o, …"
 								}
 								disabled={!hasSeeds || dispatch.isPending}
 								autoComplete="off"
