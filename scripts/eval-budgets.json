@@ -1,0 +1,65 @@
+{
+	"$comment": "Efficiency budgets for os-eco integration probes. count = exact gate, bytes = ratchet (<= budget), ms = advisory (ungated). Re-baseline with `bun run check:eval-budgets -- --update`; never hand-edit.",
+	"metrics": {
+		"burrow.burrowsUp.fetchCount": {
+			"unit": "count",
+			"budget": 1
+		},
+		"canopy.listAndRender.spawnCount": {
+			"unit": "count",
+			"budget": 4
+		},
+		"mulch.merge.appended": {
+			"unit": "count",
+			"budget": 25
+		},
+		"mulch.merge.emitCount": {
+			"unit": "count",
+			"budget": 50
+		},
+		"mulch.merge.mergedBytes": {
+			"unit": "bytes",
+			"budget": 7811
+		},
+		"mulch.merge.updated": {
+			"unit": "count",
+			"budget": 25
+		},
+		"plan-run.parentGate.dbReads": {
+			"unit": "count",
+			"budget": 2
+		},
+		"plan-run.parentGate.eventsList": {
+			"unit": "count",
+			"budget": 1
+		},
+		"plan-run.parentGate.runsGet": {
+			"unit": "count",
+			"budget": 1
+		},
+		"plot.mergeEvents.appended": {
+			"unit": "count",
+			"budget": 20
+		},
+		"plot.mergeEvents.mergedBytes": {
+			"unit": "bytes",
+			"budget": 2576
+		},
+		"sapling.buildSeedFiles.fileCount": {
+			"unit": "count",
+			"budget": 1
+		},
+		"sapling.buildSeedFiles.totalBytes": {
+			"unit": "bytes",
+			"budget": 1880
+		},
+		"seeds.listScheduled.spawnCount": {
+			"unit": "count",
+			"budget": 1
+		},
+		"seeds.updateExtensions.spawnCount": {
+			"unit": "count",
+			"budget": 1
+		}
+	}
+}
