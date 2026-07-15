@@ -23,6 +23,7 @@ jobs:
   enable-auto-merge:
     runs-on: ubuntu-latest
     if: >-
+      github.repository == 'jayminwest/warren' &&
       !github.event.pull_request.draft &&
       github.event.pull_request.user.login == github.repository_owner
     steps:
