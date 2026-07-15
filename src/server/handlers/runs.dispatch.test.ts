@@ -3,8 +3,31 @@ import { openDatabase, type WarrenDb } from "../../db/client.ts";
 import { createRepos, type Repos } from "../../db/repos/index.ts";
 import { NO_AUTH } from "../auth.ts";
 import { startServer } from "../server.ts";
-import type { BridgeRegistry, ServeHandle } from "../types.ts";
+import type { BridgeRegistry, Logger, ServeHandle } from "../types.ts";
 import { depsFor, makeBurrowClient, silentLogger, tcpUrl } from "./runs.test-helpers.ts";
+
+// warren-c686: `startServer` resolves its per-request logger as
+// `opts.logger ?? deps.logger` (see server.ts), and every existing test in
+// this file already passes `opts.logger: silentLogger` — so a capturing
+// logger has to ride on `opts.logger`, not `deps.logger`, to observe what
+// `ctx.logger` (and therefore spawnRun's instrumentation) actually emits.
+interface CapturedLog {
+	level: "info" | "warn" | "error";
+	obj: Record<string, unknown>;
+	msg?: string;
+}
+
+function makeCapturingLogger(): { logger: Logger; logs: CapturedLog[] } {
+	const logs: CapturedLog[] = [];
+	return {
+		logs,
+		logger: {
+			info: (obj, msg) => logs.push({ level: "info", obj: obj as Record<string, unknown>, msg }),
+			warn: (obj, msg) => logs.push({ level: "warn", obj: obj as Record<string, unknown>, msg }),
+			error: (obj, msg) => logs.push({ level: "error", obj: obj as Record<string, unknown>, msg }),
+		},
+	};
+}
 
 describe("POST /runs — spawn flow", () => {
 	let db: WarrenDb;
@@ -106,6 +129,52 @@ describe("POST /runs — spawn flow", () => {
 		expect(bridgeStarted[0]?.burrowRunId).toBe("run_zzzzzzzzzzzz");
 		expect(calls.some((c) => c.method === "POST" && c.path === "/burrows")).toBe(true);
 		expect(calls.some((c) => c.path === "/burrows/bur_xxxxxxxxxxxx/runs")).toBe(true);
+	});
+
+	test("wires ctx.logger + ctx.requestId into spawnRun so instrumentation fires on the real HTTP path (warren-c686)", async () => {
+		const project = (await repos.projects.listAll())[0];
+		if (!project) throw new Error("project missing");
+
+		const { mkdtemp } = await import("node:fs/promises");
+		const { tmpdir } = await import("node:os");
+		const { join } = await import("node:path");
+		const tmpWs = await mkdtemp(join(tmpdir(), "warren-handlers-logwire-"));
+
+		const calls: { method: string; path: string; body: unknown }[] = [];
+		const burrowClient = makeBurrowClient(
+			{ burrowId: "bur_logwire00000", burrowRunId: "run_logwire00000", workspacePath: tmpWs },
+			calls,
+		);
+		const deps = await depsFor(repos, burrowClient);
+		const { logger, logs } = makeCapturingLogger();
+		handle = startServer(deps, {
+			transport: { kind: "tcp", hostname: "127.0.0.1", port: 0 },
+			auth: NO_AUTH,
+			logger,
+		});
+
+		const res = await fetch(`${tcpUrl(handle)}/runs`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ agent: "refactor-bot", project: project.id, prompt: "hello" }),
+		});
+		expect(res.status).toBe(201);
+		const body = (await res.json()) as { run: { id: string } };
+		const requestId = res.headers.get("X-Request-ID");
+		expect(requestId).toBeTruthy();
+
+		const placement = logs.find((l) => l.msg === "spawn.placement_resolved");
+		expect(placement).toBeDefined();
+		expect(placement?.obj.run_id).toBe(body.run.id);
+		expect(placement?.obj.request_id).toBe(requestId);
+
+		const provisioned = logs.find((l) => l.msg === "spawn.provision_succeeded");
+		expect(provisioned).toBeDefined();
+		expect(provisioned?.obj.request_id).toBe(requestId);
+
+		const dispatched = logs.find((l) => l.msg === "spawn.dispatch_succeeded");
+		expect(dispatched).toBeDefined();
+		expect(dispatched?.obj.request_id).toBe(requestId);
 	});
 
 	test("optional seedId persists onto runs.seed_id (warren-805a)", async () => {

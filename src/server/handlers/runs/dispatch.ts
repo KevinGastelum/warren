@@ -147,6 +147,13 @@ export function createRunHandler(deps: ServerDeps): RouteHandler {
 			warrenConfigs: deps.warrenConfigs,
 			runBranchPrefixDefault: deps.runBranchPrefixDefault,
 			seedsCli: deps.seedsCli,
+			// warren-c686: thread the per-request logger (already bound with
+			// request_id, warren-30af) + the correlation id itself into
+			// spawnRun's instrumentation seam, so placement/provision/dispatch
+			// and rollback logs actually fire on the real HTTP dispatch path
+			// instead of only in tests that construct spawnRun's input by hand.
+			logger: ctx.logger,
+			requestId: ctx.requestId,
 		};
 
 		// warren-d525: the real dispatch — spawn and attach the bridge. Wrapped

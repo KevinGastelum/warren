@@ -68,6 +68,7 @@ import { interactiveRuntimeOverride } from "../../warren-config/schema.ts";
 import { composeRunBranch, resolveRunBranchPrefix } from "../branch.ts";
 import { parseBurrowConfig } from "../burrow-config.ts";
 import { buildSeedFiles } from "../seed.ts";
+import type { BridgeLogger } from "../stream/index.ts";
 import { readCachedAgent, readProjectDefaults, resolveOverride } from "./agent-cache.ts";
 import {
 	defaultPlotAppender,
@@ -77,8 +78,24 @@ import {
 } from "./plot-append.ts";
 import { writeSeedExtensions } from "./seed-extensions.ts";
 import type { SpawnRunInput, SpawnRunResult } from "./types.ts";
+import { formatError } from "./util.ts";
 
-export async function spawnRun(input: SpawnRunInput): Promise<SpawnRunResult> {
+/**
+ * Instrumentation seam (warren-c686 / pl-f700 step 1). Kept as a local
+ * intersection on `SpawnRunInput` instead of editing `./types.ts` — the
+ * structural logger pass (child-logger binding, non-optional loggers,
+ * repo-wide event-name convention) is sibling seed warren-9f06's scope.
+ * `logger` mirrors the optional-logger shape already used by
+ * `src/runs/watchdog.ts` / `src/runs/reap/*` (`BridgeLogger`); `requestId`
+ * is the caller's `RouteContext.requestId` (see `src/server/request-id.ts`)
+ * threaded in verbatim so every spawn log line is greppable by either id.
+ */
+type SpawnRunInputWithLogging = SpawnRunInput & {
+	readonly logger?: BridgeLogger;
+	readonly requestId?: string;
+};
+
+export async function spawnRun(input: SpawnRunInputWithLogging): Promise<SpawnRunResult> {
 	if (input.prompt.trim() === "") {
 		throw new ValidationError("prompt cannot be empty");
 	}
@@ -196,6 +213,16 @@ export async function spawnRun(input: SpawnRunInput): Promise<SpawnRunResult> {
 		now: input.now?.(),
 	});
 
+	input.logger?.info?.(
+		{
+			run_id: run.id,
+			request_id: input.requestId,
+			worker: placement.workerName,
+			project_id: projectAfterRefresh.id,
+		},
+		"spawn.placement_resolved",
+	);
+
 	// warren-9993: compose the burrow workspace branch as `${prefix}/${run.id}`
 	// so the branch traces back to the warren run on `git log` / PR review.
 	// Precedence project default > env > "burrow" (the legacy default,
@@ -225,6 +252,7 @@ export async function spawnRun(input: SpawnRunInput): Promise<SpawnRunResult> {
 
 	let burrow: Burrow | null = null;
 	try {
+		const provisionStartedAt = Date.now();
 		burrow = await provisionBurrow(
 			placement.client,
 			projectAfterRefresh.localPath,
@@ -234,6 +262,15 @@ export async function spawnRun(input: SpawnRunInput): Promise<SpawnRunResult> {
 			seedResult.files,
 			branch,
 			runEnv,
+		);
+		input.logger?.info?.(
+			{
+				run_id: run.id,
+				request_id: input.requestId,
+				burrow_id: burrow.id,
+				elapsed_ms: Date.now() - provisionStartedAt,
+			},
+			"spawn.provision_succeeded",
 		);
 		// warren-39c3: persist the burrow → worker mapping (sticky-by-burrow)
 		// so cancel / steer / reap reads resolve the owning worker via
@@ -249,12 +286,22 @@ export async function spawnRun(input: SpawnRunInput): Promise<SpawnRunResult> {
 		// warren-ebca / warren-16f8: dispatch onto the burrow runtime id
 		// (`readRuntimeId`: frontmatter.runtime pin, else the pi default),
 		// not the canopy agent name.
+		const dispatchStartedAt = Date.now();
 		const burrowRun = await dispatchRun(
 			placement.client,
 			burrow.id,
 			readRuntimeId(agent, runtimeOverride),
 			composeDispatchPrompt(agent.sections.system, input.prompt),
 			composeBurrowMetadata(input.metadata, agent.frontmatter),
+		);
+		input.logger?.info?.(
+			{
+				run_id: run.id,
+				request_id: input.requestId,
+				burrow_run_id: burrowRun.id,
+				elapsed_ms: Date.now() - dispatchStartedAt,
+			},
+			"spawn.dispatch_succeeded",
 		);
 		const updated = await input.repos.runs.attachBurrow(run.id, { burrowRunId: burrowRun.id });
 		// pl-bb70 step 4: stamp the seed's warren-namespaced extensions after
@@ -475,26 +522,45 @@ function composeBurrowMetadata(
 }
 
 async function rollback(
-	input: SpawnRunInput,
+	input: SpawnRunInputWithLogging,
 	runId: string,
 	burrow: Burrow | null,
 	client: BurrowClient,
 ): Promise<void> {
+	const logFields = { run_id: runId, request_id: input.requestId };
 	try {
 		await input.repos.runs.finalize(runId, "cancelled", input.now?.());
-	} catch {
-		// Either the row was already terminal (shouldn't happen on this path)
-		// or the db handle is gone — either way, nothing to recover here.
+		input.logger?.info?.(logFields, "spawn.rollback_finalized");
+	} catch (err) {
+		// warren-c686: this used to be a bare `catch {}` — either the row was
+		// already terminal (shouldn't happen on this path) or the db handle is
+		// gone, and the failure was silently dropped either way. Still nothing
+		// to recover here (best-effort, matches the destroy catch below), but
+		// now it's greppable instead of invisible.
+		input.logger?.error?.(
+			{ ...logFields, reason: formatError(err) },
+			"spawn.rollback_finalize_failed",
+		);
 	}
 	if (burrow !== null) {
 		try {
 			await withTransportMapping(client.config, () =>
 				client.http.burrows.destroy(burrow.id, { archive: false }),
 			);
-		} catch {
-			// Best-effort cleanup. The operator can list stranded burrows via
-			// burrow's own UI / CLI; we don't want a cleanup failure to mask
-			// the original error the caller is about to see rethrown.
+			input.logger?.info?.(
+				{ ...logFields, burrow_id: burrow.id },
+				"spawn.rollback_burrow_destroyed",
+			);
+		} catch (err) {
+			// warren-c686: this used to be a bare `catch {}` too — a stranded
+			// burrow left no trace anywhere. Best-effort cleanup is unchanged
+			// (the operator can list stranded burrows via burrow's own UI / CLI;
+			// a cleanup failure must never mask the original error the caller is
+			// about to see rethrown) — but the failure is now logged.
+			input.logger?.error?.(
+				{ ...logFields, burrow_id: burrow.id, reason: formatError(err) },
+				"spawn.rollback_burrow_destroy_failed",
+			);
 		}
 	}
 }
